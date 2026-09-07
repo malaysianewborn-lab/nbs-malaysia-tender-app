@@ -1,0 +1,19 @@
+{
+  "name": "newborn-screening-malaysia-tender-estimator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cost estimator & tender discussion tool for Newborn Screening Malaysia (multi-site)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "cookie-session": "^2.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Newborn Screening Malaysia — Tender Cost Estimator</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <h1>Newborn Screening Malaysia</h1>
+    <p class="subtitle">Tender Cost Estimator</p>
+    <form id="login-form">
+      <label for="password">Team password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
+      <button type="submit">Enter</button>
+      <p id="login-error" class="error-text" hidden>Incorrect password.</p>
+    </form>
+  </div>
+</div>
+
+<div id="app-screen" class="app-screen" hidden>
+  <header class="app-header">
+    <div class="brand">
+      <strong>Newborn Screening Malaysia</strong>
+      <span>Tender Cost Estimator</span>
+    </div>
+    <div class="site-controls">
+      <select id="site-select"></select>
+      <button id="new-site-btn" class="btn-secondary">+ New Site</button>
+      <button id="rename-site-btn" class="btn-secondary">Rename</button>
+      <button id="delete-site-btn" class="btn-danger">Delete</button>
+      <span id="save-status" class="save-status"></span>
+      <button id="logout-btn" class="btn-secondary">Log out</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="batchSetup" class="tab-btn active">Batch Setup</button>
+    <button data-tab="lcGradient" class="tab-btn">LC Gradient</button>
+    <button data-tab="calibratorPrep" class="tab-btn">Calibrator &amp; QC Prep</button>
+    <button data-tab="reagents" class="tab-btn">Reagents</button>
+    <button data-tab="column" class="tab-btn">Column</button>
+    <button data-tab="solvents" class="tab-btn">Solvents &amp; Acid</button>
+    <button data-tab="summary" class="tab-btn">Summary</button>
+    <button data-tab="discussion" class="tab-btn">Discussion</button>
+  </nav>
+
+  <main id="tab-content" class="tab-content"></main>
+</div>
+
+<script src="calc.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
