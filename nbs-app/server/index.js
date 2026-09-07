@@ -31,7 +31,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const app = express();
-app.set('trust proxy', 1); // Render sits behind a reverse proxy — needed for secure cookies to work correctly
+app.set('trust proxy', true); // Render's proxy chain — trust all hops so req.secure reflects the real (HTTPS) client connection
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(
@@ -49,7 +49,17 @@ function requireAuth(req, res, next) {
   if (req.session && req.session.authed) return next();
   return res.status(401).json({ error: 'Not authenticated' });
 }
-
+// TEMPORARY diagnostic route — safe to leave in briefly, remove once login is confirmed working.
+// Shows exactly what Express sees re: protocol/proxy headers, with no secrets exposed.
+app.get('/api/debug-proxy', (req, res) => {
+  res.json({
+    protocol: req.protocol,
+    secure: req.secure,
+    xForwardedProto: req.headers['x-forwarded-proto'] || null,
+    host: req.headers['host'] || null,
+    nodeEnv: process.env.NODE_ENV || null,
+  });
+});
 // ---------- Auth ----------
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
