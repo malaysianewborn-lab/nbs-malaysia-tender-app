@@ -31,6 +31,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 });
 
 const app = express();
+app.set('trust proxy', 1); // Render sits behind a reverse proxy — needed for secure cookies to work correctly
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(
