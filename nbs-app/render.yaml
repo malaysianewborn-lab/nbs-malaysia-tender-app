@@ -3,6 +3,7 @@ services:
     name: newborn-screening-malaysia-tender
     runtime: node
     plan: free
+    rootDir: nbs-app
     buildCommand: npm install
     startCommand: npm start
     envVars:
