@@ -10,10 +10,11 @@
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {
+    "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
     "cookie-session": "^2.1.0",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "multer": "^2.0.0"
   }
 }
