@@ -1,8 +1,10 @@
 /* Newborn Screening Malaysia — Tender Cost Estimator
    Front-end app: auth, site management, tab rendering, live recalculation.
    No build step — plain JS, talks to the Express API which proxies Supabase. */
+
 console.log('APP.JS LOADED — TOP OF FILE, script is executing');
-const state = { siteId: null, site: null, sites: [], activeTab: 'batchSetup', saveTimer: null };
+
+const state = { siteId: null, site: null, sites: [], activeTab: 'calculator', activeCalcSection: 'batchSetup', saveTimer: null };
 
 // ---------- Utilities ----------
 function getPath(obj, path) {
@@ -78,7 +80,6 @@ const DEFAULT_SITE_DATA = {
       { level: 'QC2', vol: 15, isVol: 100 },
     ],
     standard: { vialSize: 1000, dead: 50, costPerVial: 400 },
-    methanol: { bottleSize: 4000, dead: 30, costPerBottle: 45 },
   },
   reagents: {
     is: { volPerUse: 100, vialSize: 1500, dead: 100, costPerVial: 350 },
@@ -93,6 +94,23 @@ const DEFAULT_SITE_DATA = {
     water: { bottleSize: 4000, dead: 30, costPerBottle: 10 },
     acn: { bottleSize: 4000, dead: 30, costPerBottle: 55 },
     pfhepta: { bottleSize: 100, dead: 3, costPerBottle: 180 },
+    calibratorMethanol: { bottleSize: 4000, dead: 30, costPerBottle: 45 },
+    generalSolvents: [
+      { name: 'Methanol (flush solvent / needle wash, general use)', qty: 6, costPerUnit: 45 },
+      { name: 'Isopropanol (IPA, general instrument maintenance)', qty: 4, costPerUnit: 40 },
+    ],
+  },
+  freightTax: {
+    freightItems: [],
+    taxRate: 0.06,
+    applyTaxToFreight: true,
+  },
+  tenderSpec: {
+    notes: '',
+  },
+  supportingInfo: {
+    links: [],
+    notes: '',
   },
 };
 
@@ -206,25 +224,118 @@ function renderActiveTab() {
   const container = document.getElementById('tab-content');
   if (!state.site) { container.innerHTML = ''; return; }
   const renderers = {
-    batchSetup: renderBatchSetup, lcGradient: renderGradient, calibratorPrep: renderCalibratorPrep,
-    reagents: renderReagents, column: renderColumn, solvents: renderSolvents,
-    summary: renderSummary, discussion: renderDiscussion,
+    tenderSpec: renderTenderSpec, images: renderImages, calculator: renderCalculator,
+    supportingInfo: renderSupportingInfo, discussion: renderDiscussion,
   };
   container.innerHTML = '';
   renderers[state.activeTab](container, state.site.data);
-  if (state.activeTab !== 'discussion') refreshComputed();
+}
+
+// The Calculator tab has its own sub-navigation across all 8 cost sections.
+const CALC_SECTIONS = [
+  { key: 'batchSetup', label: 'Batch Setup', render: renderBatchSetup },
+  { key: 'lcGradient', label: 'LC Gradient', render: renderGradient },
+  { key: 'calibratorPrep', label: 'Calibrator & QC Prep', render: renderCalibratorPrep },
+  { key: 'reagents', label: 'Reagents', render: renderReagents },
+  { key: 'column', label: 'Column', render: renderColumn },
+  { key: 'solvents', label: 'Solvents & Acid', render: renderSolvents },
+  { key: 'summary', label: 'Summary', render: renderSummary },
+  { key: 'freightTax', label: 'Freight & Tax', render: renderFreightTax },
+];
+function renderCalculator(container, data) {
+  container.innerHTML = `
+    <nav class="subtabs" id="calc-subtabs">
+      ${CALC_SECTIONS.map((s) => `<button type="button" data-calcsection="${s.key}" class="subtab-btn ${state.activeCalcSection === s.key ? 'active' : ''}">${s.label}</button>`).join('')}
+    </nav>
+    <div id="calc-section-content"></div>`;
+  renderCalcSection(data);
+}
+function renderCalcSection(data) {
+  const sectionContainer = document.getElementById('calc-section-content');
+  if (!sectionContainer) return;
+  const section = CALC_SECTIONS.find((s) => s.key === state.activeCalcSection) || CALC_SECTIONS[0];
+  section.render(sectionContainer, data);
+  refreshComputed();
 }
 
 // Delegated input handler: updates the model, recomputes, saves — never rebuilds DOM.
-document.getElementById('tab-content').addEventListener('input', (e) => {
+function handleFieldChange(e) {
   const el = e.target;
   if (!el.dataset.path) return;
   let value = el.value;
   if (el.dataset.type === 'number') value = value === '' ? 0 : parseFloat(value);
   if (el.dataset.type === 'pct') value = value === '' ? 0 : parseFloat(value) / 100;
+  if (el.dataset.type === 'bool') value = value === 'true';
   setPath(state.site.data, el.dataset.path, value);
   refreshComputed();
   scheduleSave();
+}
+document.getElementById('tab-content').addEventListener('input', handleFieldChange);
+document.getElementById('tab-content').addEventListener('change', (e) => {
+  if (e.target.tagName === 'SELECT') handleFieldChange(e);
+});
+
+// Delegated click handler for calculator sub-tabs and dynamic list rows (add/remove
+// general solvents, freight items, links)
+document.getElementById('tab-content').addEventListener('click', (e) => {
+  const subtabBtn = e.target.closest('.subtab-btn');
+  if (subtabBtn) {
+    state.activeCalcSection = subtabBtn.dataset.calcsection;
+    document.querySelectorAll('.subtab-btn').forEach((b) => b.classList.remove('active'));
+    subtabBtn.classList.add('active');
+    renderCalcSection(state.site.data);
+    return;
+  }
+  const addSolvent = e.target.closest('#add-general-solvent-btn');
+  if (addSolvent) {
+    state.site.data.solvents.generalSolvents = state.site.data.solvents.generalSolvents || [];
+    state.site.data.solvents.generalSolvents.push({ name: '', qty: 0, costPerUnit: 0 });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeSolvent = e.target.closest('[data-remove-general-solvent]');
+  if (removeSolvent) {
+    const i = parseInt(removeSolvent.dataset.removeGeneralSolvent, 10);
+    state.site.data.solvents.generalSolvents.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const addFreight = e.target.closest('#add-freight-btn');
+  if (addFreight) {
+    state.site.data.freightTax = state.site.data.freightTax || { freightItems: [], taxRate: 0, applyTaxToFreight: true };
+    state.site.data.freightTax.freightItems = state.site.data.freightTax.freightItems || [];
+    state.site.data.freightTax.freightItems.push({ description: '', amount: 0 });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeFreight = e.target.closest('[data-remove-freight]');
+  if (removeFreight) {
+    const i = parseInt(removeFreight.dataset.removeFreight, 10);
+    state.site.data.freightTax.freightItems.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const addLink = e.target.closest('#add-link-btn');
+  if (addLink) {
+    state.site.data.supportingInfo = state.site.data.supportingInfo || { links: [] };
+    state.site.data.supportingInfo.links = state.site.data.supportingInfo.links || [];
+    state.site.data.supportingInfo.links.push({ label: '', url: '' });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeLink = e.target.closest('[data-remove-link]');
+  if (removeLink) {
+    const i = parseInt(removeLink.dataset.removeLink, 10);
+    state.site.data.supportingInfo.links.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
 });
 
 function refreshComputed() {
@@ -398,20 +509,10 @@ function renderCalibratorPrep(container, data) {
             <td class="computed" data-out="calPrepCalc.stdTotalCost" data-fmt="cur">\u2014</td>
             <td class="computed" data-out="calPrepCalc.stdTotalCost" data-fmt="cur">\u2014</td>
           </tr>
-          <tr>
-            <td class="label-cell">Methanol (calibrator dilution, mL)</td>
-            <td><input type="number" step="any" data-path="calibratorPrep.methanol.bottleSize" data-type="number" value="${cp.methanol.bottleSize}" /></td>
-            <td><input type="number" step="any" data-path="calibratorPrep.methanol.dead" data-type="number" value="${cp.methanol.dead}" /></td>
-            <td class="computed" data-out="calPrepCalc.meohUsable" data-fmt="num2">\u2014</td>
-            <td class="computed" data-out="calPrepCalc.meohBottlesNeeded" data-fmt="int">\u2014</td>
-            <td><input type="number" step="any" data-path="calibratorPrep.methanol.costPerBottle" data-type="number" value="${cp.methanol.costPerBottle}" /></td>
-            <td class="computed" data-out="calPrepCalc.meohTotalCost" data-fmt="cur">\u2014</td>
-            <td class="computed" data-out="calPrepCalc.meohTotalCost" data-fmt="cur">\u2014</td>
-          </tr>
           <tr class="total-row"><td colspan="6">TOTAL</td><td colspan="2" class="computed" data-out="calPrepCalc.calPrepTotalCost" data-fmt="cur">\u2014</td></tr>
         </tbody>
       </table>
-      <p class="note">One serial dilution series is prepared per batch and supplies all calibrator levels \u2014 raw standard is consumed only where actually drawn (to make S2, plus directly for P1), not per calibration level.</p>
+      <p class="note">One serial dilution series is prepared per batch and supplies all calibrator levels \u2014 raw standard is consumed only where actually drawn (to make S2, plus directly for P1), not per calibration level. The methanol used to build this dilution series is costed on the Solvents &amp; Acid tab instead (it's a solvent, not a standard) \u2014 the per-batch volume calculated above still feeds that tab automatically.</p>
     </div>`;
 }
 
@@ -492,6 +593,8 @@ function renderColumn(container, data) {
 // ---------- Solvents & Acid ----------
 function renderSolvents(container, data) {
   const s = data.solvents;
+  s.calibratorMethanol = s.calibratorMethanol || { bottleSize: 4000, dead: 30, costPerBottle: 45 };
+  s.generalSolvents = s.generalSolvents || [];
   container.innerHTML = `
     <div class="card">
       <h2>Mobile Phase Solvents &amp; Acid Modifier Cost</h2>
@@ -541,10 +644,57 @@ function renderSolvents(container, data) {
             <td class="computed" data-out="solventsCalc.pfhepta.totalCost" data-fmt="cur">\u2014</td>
             <td class="computed" data-out="solventsCalc.pfhepta.costPerSample" data-fmt="cur">\u2014</td>
           </tr>
-          <tr class="total-row"><td colspan="9">TOTAL</td><td colspan="2" class="computed" data-out="solventsCalc.totalCost" data-fmt="cur">\u2014</td></tr>
+          <tr class="total-row"><td colspan="9">TOTAL (mobile phase)</td><td colspan="2" class="computed" data-out="solventsCalc.mobilePhaseTotal" data-fmt="cur">\u2014</td></tr>
         </tbody>
       </table>
-      <p class="note">Water and ACN volumes are linked live from the LC Gradient tab. PFHeptA/TDHFA volume is derived automatically from the % v/v set above times the combined Water+ACN volume. Methanol used for calibrator dilution is costed on the Calibrator &amp; QC Prep tab, not here.</p>
+      <p class="note">Water and ACN volumes are linked live from the LC Gradient tab. PFHeptA/TDHFA volume is derived automatically from the % v/v set above times the combined Water+ACN volume.</p>
+    </div>
+
+    <div class="card">
+      <h2>Calibrator Dilution Methanol <span style="font-weight:normal;font-size:12px;">(per-batch consumable, linked from Calibrator &amp; QC Prep tab)</span></h2>
+      <table class="calc-table">
+        <thead><tr><th>Component</th><th>Vol/batch (mL)</th><th>Batches</th><th>Vol required (mL)</th><th>Bottle size (mL)</th><th>Dead vol. (mL)</th><th>Usable vol.</th><th>Bottles needed</th><th>Cost/bottle ($)</th><th>Total cost ($)</th><th>Cost/batch ($)</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="label-cell">Methanol (calibrator serial dilution diluent)</td>
+            <td class="linked" data-out="solventsCalc.calibratorMethanol.volPerBatchML" data-fmt="num2">\u2014</td>
+            <td class="linked" data-out="__batches" data-fmt="int">\u2014</td>
+            <td class="computed" data-out="solventsCalc.calibratorMethanol.totalVolML" data-fmt="num2">\u2014</td>
+            <td><input type="number" step="any" data-path="solvents.calibratorMethanol.bottleSize" data-type="number" value="${s.calibratorMethanol.bottleSize}" /></td>
+            <td><input type="number" step="any" data-path="solvents.calibratorMethanol.dead" data-type="number" value="${s.calibratorMethanol.dead}" /></td>
+            <td class="computed" data-out="solventsCalc.calibratorMethanol.usable" data-fmt="num2">\u2014</td>
+            <td class="computed" data-out="solventsCalc.calibratorMethanol.bottlesNeeded" data-fmt="int">\u2014</td>
+            <td><input type="number" step="any" data-path="solvents.calibratorMethanol.costPerBottle" data-type="number" value="${s.calibratorMethanol.costPerBottle}" /></td>
+            <td class="computed" data-out="solventsCalc.calibratorMethanol.totalCost" data-fmt="cur">\u2014</td>
+            <td class="computed" data-out="solventsCalc.calibratorMethanol.costPerBatch" data-fmt="cur">\u2014</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note">This volume is tiny (a few hundred mL across a whole project) \u2014 it's the diluent used only to build the calibration curve's serial dilution series, not general lab methanol.</p>
+    </div>
+
+    <div class="card">
+      <h2>General Lab &amp; Maintenance Solvents <span style="font-weight:normal;font-size:12px;">(enter bottles/units directly, not formula-driven)</span></h2>
+      <table class="calc-table">
+        <thead><tr><th>Component</th><th>Bottles/units needed</th><th>Cost per bottle/unit ($)</th><th>Total cost ($)</th><th></th></tr></thead>
+        <tbody id="general-solvents-tbody">
+          ${(s.generalSolvents || []).map((g, i) => `<tr>
+            <td class="label-cell"><input type="text" data-path="solvents.generalSolvents.${i}.name" value="${escapeHtml(g.name)}" style="text-align:left;width:100%;" /></td>
+            <td><input type="number" step="any" data-path="solvents.generalSolvents.${i}.qty" data-type="number" value="${g.qty}" /></td>
+            <td><input type="number" step="any" data-path="solvents.generalSolvents.${i}.costPerUnit" data-type="number" value="${g.costPerUnit}" /></td>
+            <td class="computed" data-out="solventsCalc.generalSolvents.${i}.totalCost" data-fmt="cur">\u2014</td>
+            <td><button type="button" class="btn-remove-row" data-remove-general-solvent="${i}" title="Remove">\u2715</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" id="add-general-solvent-btn" class="btn-add-row">+ Add solvent</button>
+      <div class="field-row" style="margin-top:10px;"><label>General lab solvents subtotal</label>
+        <span data-out="solventsCalc.generalSolventsTotal" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+      <p class="note">Add rows for anything else general-purpose (hexane, ethyl acetate, etc.) \u2014 just estimate bottles/units needed for the whole project. Not tied to sample count since usage varies by maintenance schedule.</p>
+    </div>
+    <div class="card">
+      <div class="field-row"><label style="font-weight:700;">SOLVENTS &amp; ACID TAB TOTAL</label>
+        <span data-out="solventsCalc.totalCost" data-fmt="cur" style="font-weight:700;font-size:16px;color:var(--navy);min-width:100px;text-align:right;">\u2014</span></div>
     </div>`;
 }
 
@@ -557,7 +707,7 @@ function renderSummary(container) {
       <div class="summary-box"><div class="label">Calibrator &amp; QC Prep</div><div class="amount" data-out="summary.calPrepTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Column &amp; Guard</div><div class="amount" data-out="summary.columnTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Solvents &amp; Acid</div><div class="amount" data-out="summary.solventsTotal" data-fmt="cur">\u2014</div></div>
-      <div class="summary-box grand"><div class="label">GRAND TOTAL</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">\u2014</div></div>
+      <div class="summary-box grand"><div class="label">SUBTOTAL (before freight &amp; tax)</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">\u2014</div></div>
     </div>
     <div class="card">
       <h2>Cost Breakdown</h2>
@@ -569,7 +719,7 @@ function renderSummary(container) {
       <div class="summary-box"><div class="label">Cost per batch</div><div class="amount" data-out="summary.costPerBatch" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Cost per study sample</div><div class="amount" data-out="summary.costPerStudySample" data-fmt="cur">\u2014</div></div>
     </div>
-    <p class="note" style="padding:0 4px;">Instrument purchase/depreciation cost is excluded, per scope. All figures are estimates based on the inputs across the other tabs.</p>`;
+    <p class="note" style="padding:0 4px;">Instrument purchase/depreciation cost is excluded, per scope. See the Freight &amp; Tax tab for the final landed cost including shipping and tax.</p>`;
 }
 function renderSummaryChartIfActive(computed) {
   lastComputedForChart = computed;
@@ -588,6 +738,208 @@ function renderSummaryChartIfActive(computed) {
       <div class="bar" style="height:${Math.max(4, (c.value / max) * 160)}px;"></div>
       <div class="bar-label">${c.label}</div>
     </div>`).join('');
+}
+
+// ---------- Freight & Tax ----------
+function renderFreightTax(container, data) {
+  data.freightTax = data.freightTax || { freightItems: [], taxRate: 0, applyTaxToFreight: true };
+  const ft = data.freightTax;
+  ft.freightItems = ft.freightItems || [];
+  container.innerHTML = `
+    <div class="card">
+      <div class="field-row"><label>Subtotal (from Summary tab)</label>
+        <span data-out="summary.grandTotal" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+    </div>
+    <div class="card">
+      <h2>Freight Charges <span style="font-weight:normal;font-size:12px;">(add a row whenever you get a quote \u2014 leave empty until then)</span></h2>
+      <table class="calc-table">
+        <thead><tr><th>Description</th><th>Amount ($)</th><th></th></tr></thead>
+        <tbody id="freight-tbody">
+          ${(ft.freightItems || []).map((f, i) => `<tr>
+            <td class="label-cell"><input type="text" data-path="freightTax.freightItems.${i}.description" value="${escapeHtml(f.description)}" style="text-align:left;width:100%;" placeholder="e.g. International courier, customs clearance..." /></td>
+            <td><input type="number" step="any" data-path="freightTax.freightItems.${i}.amount" data-type="number" value="${f.amount}" /></td>
+            <td><button type="button" class="btn-remove-row" data-remove-freight="${i}" title="Remove">\u2715</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" id="add-freight-btn" class="btn-add-row">+ Add freight charge</button>
+      <div class="field-row" style="margin-top:10px;"><label>TOTAL FREIGHT</label>
+        <span data-out="freightTaxCalc.freightTotal" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+      <p class="note">Freight is entirely optional \u2014 leave it empty until you have real quotes, and the final total will simply equal the subtotal plus tax.</p>
+    </div>
+    <div class="card">
+      <h2>Tax</h2>
+      <div class="field-row"><label>Tax rate (%)</label>
+        <input type="number" step="any" style="width:100px" data-path="freightTax.taxRate" data-type="pct" value="${(ft.taxRate * 100).toFixed(2)}" />
+        <span class="hint">e.g. Malaysia SST/GST \u2014 replace with the applicable rate</span></div>
+      <div class="field-row"><label>Apply tax to freight too?</label>
+        <select data-path="freightTax.applyTaxToFreight" data-type="bool" style="width:100px">
+          <option value="true" ${ft.applyTaxToFreight ? 'selected' : ''}>Yes</option>
+          <option value="false" ${!ft.applyTaxToFreight ? 'selected' : ''}>No</option>
+        </select>
+        <span class="hint">Many customs/import taxes are charged on goods value + freight (CIF)</span></div>
+      <div class="field-row"><label>Taxable base ($)</label>
+        <span data-out="freightTaxCalc.taxableBase" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+      <div class="field-row"><label>Tax amount ($)</label>
+        <span data-out="freightTaxCalc.taxAmount" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-box"><div class="label">Subtotal</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">\u2014</div></div>
+      <div class="summary-box"><div class="label">Total Freight</div><div class="amount" data-out="freightTaxCalc.freightTotal" data-fmt="cur">\u2014</div></div>
+      <div class="summary-box"><div class="label">Total Tax</div><div class="amount" data-out="freightTaxCalc.taxAmount" data-fmt="cur">\u2014</div></div>
+      <div class="summary-box grand"><div class="label">FINAL TOTAL</div><div class="amount" data-out="freightTaxCalc.finalTotal" data-fmt="cur">\u2014</div></div>
+    </div>
+    <div class="card">
+      <div class="field-row"><label>Final cost per batch ($)</label>
+        <span data-out="freightTaxCalc.finalCostPerBatch" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+      <div class="field-row"><label>Final cost per study sample ($)</label>
+        <span data-out="freightTaxCalc.finalCostPerSample" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+    </div>`;
+}
+
+// ---------- Generic file upload/list/delete (shared by Tender Spec, Images, Supporting Info) ----------
+const MAX_FILE_MB = 20;
+async function initFileSection(key, category, { imageGrid }) {
+  await loadFileList(key, category, imageGrid);
+  const form = document.getElementById(`upload-form-${key}`);
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = form.querySelector('input[type="file"]');
+    const statusEl = form.querySelector('.upload-status');
+    if (!fileInput.files.length) return;
+    const file = fileInput.files[0];
+    if (file.size > MAX_FILE_MB * 1024 * 1024) { statusEl.textContent = `File is too large (max ${MAX_FILE_MB} MB).`; return; }
+    if (category === 'image' && !file.type.startsWith('image/')) { statusEl.textContent = 'Only image files are allowed here.'; return; }
+    statusEl.textContent = 'Uploading\u2026';
+    const formData = new FormData();
+    formData.append('category', category); // must be appended before 'file' for the server to see it in time
+    formData.append('file', file);
+    try {
+      const res = await fetch(`/api/sites/${state.siteId}/files`, { method: 'POST', credentials: 'include', body: formData });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
+      fileInput.value = '';
+      statusEl.textContent = '';
+      await loadFileList(key, category, imageGrid);
+    } catch (err) {
+      statusEl.textContent = err.message;
+    }
+  });
+}
+async function loadFileList(key, category, imageGrid) {
+  const listEl = document.getElementById(`file-list-${key}`);
+  if (!listEl) return;
+  try {
+    const files = await api(`/api/sites/${state.siteId}/files?category=${encodeURIComponent(category)}`);
+    if (files.length === 0) {
+      listEl.innerHTML = '<p class="note">No files uploaded yet.</p>';
+      return;
+    }
+    if (imageGrid) {
+      listEl.innerHTML = files.map((f) => `
+        <div class="image-tile">
+          <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">
+            <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" loading="lazy" />
+          </a>
+          <div class="image-tile-meta">
+            <span title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
+            <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+          </div>
+        </div>`).join('');
+    } else {
+      listEl.innerHTML = files.map((f) => `
+        <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">${escapeHtml(f.filename)}</a>
+            <div class="meta">${(f.file_size / 1024).toFixed(0)} KB \u2014 uploaded ${new Date(f.uploaded_at).toLocaleString()}</div>
+          </div>
+          <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+        </div>`).join('');
+    }
+    listEl.querySelectorAll('[data-delete-file]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this file?')) return;
+        await api(`/api/sites/${state.siteId}/files/${btn.dataset.deleteFile}`, { method: 'DELETE' });
+        await loadFileList(btn.dataset.fileKey, btn.dataset.fileCategory, imageGrid);
+      });
+    });
+  } catch (err) {
+    listEl.innerHTML = `<p class="note">Could not load files: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// ---------- Tender Spec Document ----------
+async function renderTenderSpec(container, data) {
+  data.tenderSpec = data.tenderSpec || { notes: '' };
+  container.innerHTML = `
+    <div class="card">
+      <h2>Tender Specification Notes</h2>
+      <textarea data-path="tenderSpec.notes" class="notes-textarea" placeholder="Reference number, closing date, key requirements, scope of work, etc.">${escapeHtml(data.tenderSpec.notes || '')}</textarea>
+    </div>
+    <div class="card">
+      <h2>Tender Spec Documents</h2>
+      <div id="file-list-tenderSpec"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-tenderSpec" class="upload-form">
+        <input type="file" required />
+        <button type="submit" class="btn-add-row">Upload</button>
+        <span class="upload-status hint"></span>
+      </form>
+      <p class="note">Any file type accepted (PDF, Word, Excel, etc). Max ${MAX_FILE_MB} MB per file.</p>
+    </div>`;
+  await initFileSection('tenderSpec', 'tender_spec', { imageGrid: false });
+}
+
+// ---------- Images ----------
+async function renderImages(container, data) {
+  container.innerHTML = `
+    <div class="card">
+      <h2>Site Images</h2>
+      <div id="file-list-images" class="image-grid"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-images" class="upload-form">
+        <input type="file" accept="image/*" required />
+        <button type="submit" class="btn-add-row">Upload Image</button>
+        <span class="upload-status hint"></span>
+      </form>
+      <p class="note">JPG, PNG, GIF, WebP, etc. Max ${MAX_FILE_MB} MB per file.</p>
+    </div>`;
+  await initFileSection('images', 'image', { imageGrid: true });
+}
+
+// ---------- Supporting Information ----------
+async function renderSupportingInfo(container, data) {
+  data.supportingInfo = data.supportingInfo || { links: [], notes: '' };
+  const links = data.supportingInfo.links || [];
+  container.innerHTML = `
+    <div class="card">
+      <h2>Notes</h2>
+      <textarea data-path="supportingInfo.notes" class="notes-textarea" placeholder="Any free-form notes for the tender team\u2026">${escapeHtml(data.supportingInfo.notes || '')}</textarea>
+    </div>
+    <div class="card">
+      <h2>Website Links</h2>
+      <table class="calc-table">
+        <thead><tr><th>Label</th><th>URL</th><th></th></tr></thead>
+        <tbody>
+          ${links.map((l, i) => `<tr>
+            <td class="label-cell"><input type="text" data-path="supportingInfo.links.${i}.label" value="${escapeHtml(l.label)}" style="text-align:left;width:100%;" placeholder="e.g. Vendor quote page" /></td>
+            <td><input type="text" data-path="supportingInfo.links.${i}.url" value="${escapeHtml(l.url)}" style="text-align:left;width:100%;" placeholder="https://..." /></td>
+            <td><button type="button" class="btn-remove-row" data-remove-link="${i}" title="Remove">\u2715</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" id="add-link-btn" class="btn-add-row">+ Add link</button>
+      ${links.length > 0 ? `<div style="margin-top:14px;">${links.filter(l => l.url).map(l => `<div style="margin-bottom:6px;"><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label || l.url)}</a></div>`).join('')}</div>` : ''}
+    </div>
+    <div class="card">
+      <h2>Supporting Documents</h2>
+      <div id="file-list-supportingInfo"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-supportingInfo" class="upload-form">
+        <input type="file" required />
+        <button type="submit" class="btn-add-row">Upload</button>
+        <span class="upload-status hint"></span>
+      </form>
+      <p class="note">Any file type accepted (PDF, Word, Excel, images, etc). Max ${MAX_FILE_MB} MB per file.</p>
+    </div>`;
+  await initFileSection('supportingInfo', 'supporting_doc', { imageGrid: false });
 }
 
 // ---------- Discussion ----------
