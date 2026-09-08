@@ -802,6 +802,7 @@ function renderFreightTax(container, data) {
 
 // ---------- Generic file upload/list/delete (shared by Tender Spec, Images, Supporting Info) ----------
 const MAX_FILE_MB = 20;
+const IMAGE_ONLY_CATEGORIES = ['image', 'supporting_picture'];
 async function initFileSection(key, category, { imageGrid }) {
   await loadFileList(key, category, imageGrid);
   const form = document.getElementById(`upload-form-${key}`);
@@ -813,7 +814,7 @@ async function initFileSection(key, category, { imageGrid }) {
     if (!fileInput.files.length) return;
     const file = fileInput.files[0];
     if (file.size > MAX_FILE_MB * 1024 * 1024) { statusEl.textContent = `File is too large (max ${MAX_FILE_MB} MB).`; return; }
-    if (category === 'image' && !file.type.startsWith('image/')) { statusEl.textContent = 'Only image files are allowed here.'; return; }
+    if (IMAGE_ONLY_CATEGORIES.includes(category) && !file.type.startsWith('image/')) { statusEl.textContent = 'Only image files are allowed here.'; return; }
     statusEl.textContent = 'Uploading\u2026';
     const formData = new FormData();
     formData.append('category', category); // must be appended before 'file' for the server to see it in time
@@ -841,9 +842,8 @@ async function loadFileList(key, category, imageGrid) {
     if (imageGrid) {
       listEl.innerHTML = files.map((f) => `
         <div class="image-tile">
-          <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">
-            <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" loading="lazy" />
-          </a>
+          <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" loading="lazy"
+               data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />
           <div class="image-tile-meta">
             <span title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
             <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
@@ -853,9 +853,8 @@ async function loadFileList(key, category, imageGrid) {
       listEl.innerHTML = files.map((f) => {
         const isImage = (f.mime_type || '').startsWith('image/');
         const thumb = isImage
-          ? `<a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">
-               <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" class="inline-thumb" loading="lazy" />
-             </a>`
+          ? `<img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" class="inline-thumb" loading="lazy"
+                  data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />`
           : '';
         return `
         <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
@@ -952,16 +951,38 @@ async function renderSupportingInfo(container, data) {
     </div>
     ${renderLinksSectionHtml(data.supportingInfo.links, 'supportingInfo')}
     <div class="card">
-      <h2>Supporting Documents</h2>
-      <div id="file-list-supportingInfo"><p class="note">Loading\u2026</p></div>
-      <form id="upload-form-supportingInfo" class="upload-form">
+      <h2>Pictures</h2>
+      <div id="file-list-supportingPictures" class="image-grid"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-supportingPictures" class="upload-form">
+        <input type="file" accept="image/*" required />
+        <button type="submit" class="btn-add-row">Upload Picture</button>
+        <span class="upload-status hint"></span>
+      </form>
+      <p class="note">JPG, PNG, GIF, WebP, etc. Max ${MAX_FILE_MB} MB per file. Click a thumbnail to view it larger.</p>
+    </div>
+    <div class="card">
+      <h2>Quotation</h2>
+      <div id="file-list-supportingQuotation"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-supportingQuotation" class="upload-form">
+        <input type="file" required />
+        <button type="submit" class="btn-add-row">Upload Quotation</button>
+        <span class="upload-status hint"></span>
+      </form>
+      <p class="note">Any file type accepted. Max ${MAX_FILE_MB} MB per file.</p>
+    </div>
+    <div class="card">
+      <h2>Other Documents</h2>
+      <div id="file-list-supportingOther"><p class="note">Loading\u2026</p></div>
+      <form id="upload-form-supportingOther" class="upload-form">
         <input type="file" required />
         <button type="submit" class="btn-add-row">Upload</button>
         <span class="upload-status hint"></span>
       </form>
-      <p class="note">Any file type accepted (PDF, Word, Excel, images, etc). Max ${MAX_FILE_MB} MB per file.</p>
+      <p class="note">Anything that doesn't fit Pictures or Quotation. Max ${MAX_FILE_MB} MB per file.</p>
     </div>`;
-  await initFileSection('supportingInfo', 'supporting_doc', { imageGrid: false });
+  await initFileSection('supportingPictures', 'supporting_picture', { imageGrid: true });
+  await initFileSection('supportingQuotation', 'supporting_quotation', { imageGrid: false });
+  await initFileSection('supportingOther', 'supporting_doc', { imageGrid: false });
 }
 
 // ---------- Discussion ----------
@@ -1004,6 +1025,28 @@ async function loadDiscussion() {
 }
 
 // Patch getPath to support the special "__batches" pseudo-path used in Summary
+
+// ---------- Lightbox (click-to-expand images) ----------
+function openLightbox(src, alt) {
+  const overlay = document.getElementById('lightbox-overlay');
+  const img = document.getElementById('lightbox-img');
+  img.src = src;
+  img.alt = alt || '';
+  overlay.hidden = false;
+}
+function closeLightbox() {
+  const overlay = document.getElementById('lightbox-overlay');
+  document.getElementById('lightbox-img').src = '';
+  overlay.hidden = true;
+}
+document.getElementById('lightbox-overlay').addEventListener('click', closeLightbox);
+document.getElementById('lightbox-close').addEventListener('click', (e) => { e.stopPropagation(); closeLightbox(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+// Delegated: any image with data-lightbox-src opens the lightbox on click, from anywhere in the app.
+document.addEventListener('click', (e) => {
+  const img = e.target.closest('[data-lightbox-src]');
+  if (img) openLightbox(img.dataset.lightboxSrc, img.alt);
+});
 
 // ---------- Init ----------
 checkSession();
