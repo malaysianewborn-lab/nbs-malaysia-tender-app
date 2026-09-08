@@ -35,8 +35,18 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const app = express();
 app.set('trust proxy', true); // Render's proxy chain — trust all hops so req.secure reflects the real (HTTPS) client connection
+app.set('etag', false); // belt-and-suspenders alongside Cache-Control: no-store below — API responses should never be conditionally cached/revalidated
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// API responses change frequently (site data, file lists) and must never be
+// served stale from a browser cache — this stops the ETag/304 behavior that
+// can otherwise make a freshly-uploaded file invisible until a hard refresh.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.use(
   cookieSession({
     name: 'nbs_session',
@@ -167,7 +177,8 @@ app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, async (req, res)
 // Postgres (simplest option for a modest number of tender documents/images —
 // no Supabase Storage bucket needed). List endpoint omits the file bytes to
 // keep the payload small; download endpoint streams them back.
-const VALID_CATEGORIES = ['tender_spec', 'image', 'supporting_doc'];
+const VALID_CATEGORIES = ['tender_spec', 'image', 'supporting_doc', 'supporting_picture', 'supporting_quotation'];
+const IMAGE_ONLY_CATEGORIES = ['image', 'supporting_picture'];
 
 app.get('/api/sites/:siteId/files', requireAuth, async (req, res) => {
   const category = req.query.category;
@@ -185,7 +196,7 @@ app.get('/api/sites/:siteId/files', requireAuth, async (req, res) => {
 app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const category = VALID_CATEGORIES.includes(req.body.category) ? req.body.category : 'supporting_doc';
-  if (category === 'image' && !req.file.mimetype.startsWith('image/')) {
+  if (IMAGE_ONLY_CATEGORIES.includes(category) && !req.file.mimetype.startsWith('image/')) {
     return res.status(400).json({ error: 'Only image files are allowed here' });
   }
   const { error } = await supabase.from('supporting_files').insert({
