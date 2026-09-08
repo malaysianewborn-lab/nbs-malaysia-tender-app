@@ -1,7 +1,7 @@
 /* Newborn Screening Malaysia — Tender Cost Estimator
    Front-end app: auth, site management, tab rendering, live recalculation.
    No build step — plain JS, talks to the Express API which proxies Supabase. */
-
+console.log('APP.JS LOADED — TOP OF FILE, script is executing');
 const state = { siteId: null, site: null, sites: [], activeTab: 'batchSetup', saveTimer: null };
 
 // ---------- Utilities ----------
