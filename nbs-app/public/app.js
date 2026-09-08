@@ -850,14 +850,25 @@ async function loadFileList(key, category, imageGrid) {
           </div>
         </div>`).join('');
     } else {
-      listEl.innerHTML = files.map((f) => `
-        <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">${escapeHtml(f.filename)}</a>
-            <div class="meta">${(f.file_size / 1024).toFixed(0)} KB \u2014 uploaded ${new Date(f.uploaded_at).toLocaleString()}</div>
+      listEl.innerHTML = files.map((f) => {
+        const isImage = (f.mime_type || '').startsWith('image/');
+        const thumb = isImage
+          ? `<a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">
+               <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" class="inline-thumb" loading="lazy" />
+             </a>`
+          : '';
+        return `
+        <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            ${thumb}
+            <div style="min-width:0;">
+              <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">${escapeHtml(f.filename)}</a>
+              <div class="meta">${(f.file_size / 1024).toFixed(0)} KB \u2014 uploaded ${new Date(f.uploaded_at).toLocaleString()}</div>
+            </div>
           </div>
           <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     }
     listEl.querySelectorAll('[data-delete-file]').forEach((btn) => {
       btn.addEventListener('click', async () => {
