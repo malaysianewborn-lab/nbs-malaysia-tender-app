@@ -107,6 +107,7 @@ const DEFAULT_SITE_DATA = {
   },
   tenderSpec: {
     notes: '',
+    links: [],
   },
   supportingInfo: {
     links: [],
@@ -319,19 +320,21 @@ document.getElementById('tab-content').addEventListener('click', (e) => {
     scheduleSave();
     return;
   }
-  const addLink = e.target.closest('#add-link-btn');
+  const addLink = e.target.closest('[data-add-link]');
   if (addLink) {
-    state.site.data.supportingInfo = state.site.data.supportingInfo || { links: [] };
-    state.site.data.supportingInfo.links = state.site.data.supportingInfo.links || [];
-    state.site.data.supportingInfo.links.push({ label: '', url: '' });
+    const linksPath = addLink.dataset.addLink; // e.g. "tenderSpec.links" or "supportingInfo.links"
+    let links = getPath(state.site.data, linksPath);
+    if (!links) { links = []; setPath(state.site.data, linksPath, links); }
+    links.push({ label: '', url: '' });
     renderActiveTab();
     scheduleSave();
     return;
   }
   const removeLink = e.target.closest('[data-remove-link]');
   if (removeLink) {
+    const linksPath = removeLink.dataset.linksPath;
     const i = parseInt(removeLink.dataset.removeLink, 10);
-    state.site.data.supportingInfo.links.splice(i, 1);
+    getPath(state.site.data, linksPath).splice(i, 1);
     renderActiveTab();
     scheduleSave();
     return;
@@ -868,14 +871,36 @@ async function loadFileList(key, category, imageGrid) {
   }
 }
 
+// ---------- Reusable "Website Links" section (used by Tender Spec & Supporting Info) ----------
+function renderLinksSectionHtml(links, pathPrefix) {
+  return `
+    <div class="card">
+      <h2>Website Links</h2>
+      <table class="calc-table">
+        <thead><tr><th>Label</th><th>URL</th><th></th></tr></thead>
+        <tbody>
+          ${links.map((l, i) => `<tr>
+            <td class="label-cell"><input type="text" data-path="${pathPrefix}.links.${i}.label" value="${escapeHtml(l.label)}" style="text-align:left;width:100%;" placeholder="e.g. Vendor quote page" /></td>
+            <td><input type="text" data-path="${pathPrefix}.links.${i}.url" value="${escapeHtml(l.url)}" style="text-align:left;width:100%;" placeholder="https://..." /></td>
+            <td><button type="button" class="btn-remove-row" data-remove-link="${i}" data-links-path="${pathPrefix}.links" title="Remove">\u2715</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" class="btn-add-row" data-add-link="${pathPrefix}.links">+ Add link</button>
+      ${links.length > 0 ? `<div style="margin-top:14px;">${links.filter(l => l.url).map(l => `<div style="margin-bottom:6px;"><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label || l.url)}</a></div>`).join('')}</div>` : ''}
+    </div>`;
+}
+
 // ---------- Tender Spec Document ----------
 async function renderTenderSpec(container, data) {
-  data.tenderSpec = data.tenderSpec || { notes: '' };
+  data.tenderSpec = data.tenderSpec || { notes: '', links: [] };
+  data.tenderSpec.links = data.tenderSpec.links || [];
   container.innerHTML = `
     <div class="card">
       <h2>Tender Specification Notes</h2>
       <textarea data-path="tenderSpec.notes" class="notes-textarea" placeholder="Reference number, closing date, key requirements, scope of work, etc.">${escapeHtml(data.tenderSpec.notes || '')}</textarea>
     </div>
+    ${renderLinksSectionHtml(data.tenderSpec.links, 'tenderSpec')}
     <div class="card">
       <h2>Tender Spec Documents</h2>
       <div id="file-list-tenderSpec"><p class="note">Loading\u2026</p></div>
@@ -908,27 +933,13 @@ async function renderImages(container, data) {
 // ---------- Supporting Information ----------
 async function renderSupportingInfo(container, data) {
   data.supportingInfo = data.supportingInfo || { links: [], notes: '' };
-  const links = data.supportingInfo.links || [];
+  data.supportingInfo.links = data.supportingInfo.links || [];
   container.innerHTML = `
     <div class="card">
       <h2>Notes</h2>
       <textarea data-path="supportingInfo.notes" class="notes-textarea" placeholder="Any free-form notes for the tender team\u2026">${escapeHtml(data.supportingInfo.notes || '')}</textarea>
     </div>
-    <div class="card">
-      <h2>Website Links</h2>
-      <table class="calc-table">
-        <thead><tr><th>Label</th><th>URL</th><th></th></tr></thead>
-        <tbody>
-          ${links.map((l, i) => `<tr>
-            <td class="label-cell"><input type="text" data-path="supportingInfo.links.${i}.label" value="${escapeHtml(l.label)}" style="text-align:left;width:100%;" placeholder="e.g. Vendor quote page" /></td>
-            <td><input type="text" data-path="supportingInfo.links.${i}.url" value="${escapeHtml(l.url)}" style="text-align:left;width:100%;" placeholder="https://..." /></td>
-            <td><button type="button" class="btn-remove-row" data-remove-link="${i}" title="Remove">\u2715</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-      <button type="button" id="add-link-btn" class="btn-add-row">+ Add link</button>
-      ${links.length > 0 ? `<div style="margin-top:14px;">${links.filter(l => l.url).map(l => `<div style="margin-bottom:6px;"><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label || l.url)}</a></div>`).join('')}</div>` : ''}
-    </div>
+    ${renderLinksSectionHtml(data.supportingInfo.links, 'supportingInfo')}
     <div class="card">
       <h2>Supporting Documents</h2>
       <div id="file-list-supportingInfo"><p class="note">Loading\u2026</p></div>
