@@ -7,7 +7,10 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const cookieSession = require('cookie-session');
+const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB cap
 
 const {
   SUPABASE_URL,
@@ -49,27 +52,7 @@ function requireAuth(req, res, next) {
   if (req.session && req.session.authed) return next();
   return res.status(401).json({ error: 'Not authenticated' });
 }
-// TEMPORARY diagnostic route — safe to leave in briefly, remove once login is confirmed working.
-// Shows exactly what Express sees re: protocol/proxy headers, with no secrets exposed.
-app.get('/api/debug-proxy', (req, res) => {
-  res.json({
-    protocol: req.protocol,
-    secure: req.secure,
-    xForwardedProto: req.headers['x-forwarded-proto'] || null,
-    host: req.headers['host'] || null,
-    nodeEnv: process.env.NODE_ENV || null,
-  });
-});
-// TEMPORARY diagnostic — reveals only the LENGTH and JSON-escaped char codes of the
-// stored password (never the value itself), to catch invisible characters like a
-// trailing newline from a copy-paste. Remove once login is confirmed working.
-app.get('/api/debug-password-check', (req, res) => {
-  const pw = APP_SHARED_PASSWORD || '';
-  res.json({
-    length: pw.length,
-    charCodes: Array.from(pw).map((c) => c.charCodeAt(0)),
-  });
-});
+
 // ---------- Auth ----------
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
@@ -179,10 +162,80 @@ app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, async (req, res)
   res.json({ ok: true });
 });
 
+// ---------- Files: Tender Spec docs, Images, and Supporting Info docs ----------
+// All share one table, distinguished by "category". Stored as base64 in
+// Postgres (simplest option for a modest number of tender documents/images —
+// no Supabase Storage bucket needed). List endpoint omits the file bytes to
+// keep the payload small; download endpoint streams them back.
+const VALID_CATEGORIES = ['tender_spec', 'image', 'supporting_doc'];
+
+app.get('/api/sites/:siteId/files', requireAuth, async (req, res) => {
+  const category = req.query.category;
+  let query = supabase
+    .from('supporting_files')
+    .select('id, filename, mime_type, file_size, category, uploaded_at')
+    .eq('site_id', req.params.siteId)
+    .order('uploaded_at', { ascending: false });
+  if (category) query = query.eq('category', category);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const category = VALID_CATEGORIES.includes(req.body.category) ? req.body.category : 'supporting_doc';
+  if (category === 'image' && !req.file.mimetype.startsWith('image/')) {
+    return res.status(400).json({ error: 'Only image files are allowed here' });
+  }
+  const { error } = await supabase.from('supporting_files').insert({
+    site_id: req.params.siteId,
+    category,
+    filename: req.file.originalname,
+    mime_type: req.file.mimetype,
+    file_size: req.file.size,
+    file_data: req.file.buffer.toString('base64'),
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.get('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('supporting_files')
+    .select('filename, mime_type, file_data')
+    .eq('id', req.params.fileId)
+    .eq('site_id', req.params.siteId)
+    .single();
+  if (error || !data) return res.status(404).json({ error: 'File not found' });
+  res.set('Content-Type', data.mime_type);
+  res.set('Content-Disposition', `inline; filename="${encodeURIComponent(data.filename)}"`);
+  res.send(Buffer.from(data.file_data, 'base64'));
+});
+
+app.delete('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => {
+  const { error } = await supabase
+    .from('supporting_files')
+    .delete()
+    .eq('id', req.params.fileId)
+    .eq('site_id', req.params.siteId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
 // ---------- Static front-end ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+// Catches Multer errors (e.g. file too large) and any other thrown errors,
+// returning JSON instead of Express's default HTML error page.
+app.use((err, req, res, next) => {
+  // eslint-disable-next-line no-console
+  console.error(err);
+  const status = err.status || (err.name === 'MulterError' ? 400 : 500);
+  res.status(status).json({ error: err.message || 'Something went wrong' });
 });
 
 app.listen(PORT, () => {
