@@ -60,6 +60,16 @@ app.get('/api/debug-proxy', (req, res) => {
     nodeEnv: process.env.NODE_ENV || null,
   });
 });
+// TEMPORARY diagnostic — reveals only the LENGTH and JSON-escaped char codes of the
+// stored password (never the value itself), to catch invisible characters like a
+// trailing newline from a copy-paste. Remove once login is confirmed working.
+app.get('/api/debug-password-check', (req, res) => {
+  const pw = APP_SHARED_PASSWORD || '';
+  res.json({
+    length: pw.length,
+    charCodes: Array.from(pw).map((c) => c.charCodeAt(0)),
+  });
+});
 // ---------- Auth ----------
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
