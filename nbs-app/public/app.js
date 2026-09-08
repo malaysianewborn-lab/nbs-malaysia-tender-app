@@ -501,7 +501,7 @@ function renderCalibratorPrep(container, data) {
     <div class="card">
       <h2>Cost of Calibration Consumables</h2>
       <table class="calc-table">
-        <thead><tr><th>Material</th><th>Vial/bottle size</th><th>Dead/waste vol.</th><th>Usable volume</th><th>Units needed</th><th>Cost per unit ($)</th><th>Total cost ($)</th><th>Cost/batch ($)</th></tr></thead>
+        <thead><tr><th>Material</th><th>Vial/bottle size (\u00b5L)</th><th>Dead/waste vol. (\u00b5L)</th><th>Usable volume</th><th>Units needed</th><th>Cost per unit ($)</th><th>Total cost ($)</th><th>Cost/batch ($)</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell">Amino Acid Standard (raw stock, \u00b5L)</td>
