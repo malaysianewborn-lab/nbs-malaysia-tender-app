@@ -4,7 +4,7 @@
 
 console.log('APP.JS LOADED — TOP OF FILE, script is executing');
 
-const state = { siteId: null, site: null, sites: [], activeTab: 'calculator', activeCalcSection: 'batchSetup', saveTimer: null };
+const state = { siteId: null, site: null, sites: [], activeTab: 'tenderSpec', activeCalcSection: 'batchSetup', saveTimer: null };
 
 // ---------- Utilities ----------
 function getPath(obj, path) {
@@ -30,6 +30,7 @@ function fmt(value, kind) {
 async function api(path, options = {}) {
   const res = await fetch(path, {
     credentials: 'include',
+    cache: 'no-store', // GET responses here change frequently (site data, file lists) — never let the browser serve a stale cached copy
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
@@ -225,7 +226,7 @@ function renderActiveTab() {
   const container = document.getElementById('tab-content');
   if (!state.site) { container.innerHTML = ''; return; }
   const renderers = {
-    tenderSpec: renderTenderSpec, images: renderImages, calculator: renderCalculator,
+    tenderSpec: renderTenderSpec, calculator: renderCalculator,
     supportingInfo: renderSupportingInfo, discussion: renderDiscussion,
   };
   container.innerHTML = '';
@@ -820,7 +821,7 @@ async function initFileSection(key, category, { imageGrid }) {
     formData.append('category', category); // must be appended before 'file' for the server to see it in time
     formData.append('file', file);
     try {
-      const res = await fetch(`/api/sites/${state.siteId}/files`, { method: 'POST', credentials: 'include', body: formData });
+      const res = await fetch(`/api/sites/${state.siteId}/files`, { method: 'POST', credentials: 'include', cache: 'no-store', body: formData });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Upload failed');
       fileInput.value = '';
       statusEl.textContent = '';
@@ -922,22 +923,6 @@ async function renderTenderSpec(container, data) {
       <p class="note">Any file type accepted (PDF, Word, Excel, etc). Max ${MAX_FILE_MB} MB per file.</p>
     </div>`;
   await initFileSection('tenderSpec', 'tender_spec', { imageGrid: false });
-}
-
-// ---------- Images ----------
-async function renderImages(container, data) {
-  container.innerHTML = `
-    <div class="card">
-      <h2>Site Images</h2>
-      <div id="file-list-images" class="image-grid"><p class="note">Loading\u2026</p></div>
-      <form id="upload-form-images" class="upload-form">
-        <input type="file" accept="image/*" required />
-        <button type="submit" class="btn-add-row">Upload Image</button>
-        <span class="upload-status hint"></span>
-      </form>
-      <p class="note">JPG, PNG, GIF, WebP, etc. Max ${MAX_FILE_MB} MB per file.</p>
-    </div>`;
-  await initFileSection('images', 'image', { imageGrid: true });
 }
 
 // ---------- Supporting Information ----------
