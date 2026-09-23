@@ -6,6 +6,19 @@ console.log('APP.JS LOADED — TOP OF FILE, script is executing');
 
 const state = { siteId: null, site: null, sites: [], activeTab: 'tenderSpec', activeCalcSection: 'batchSetup', saveTimer: null };
 
+// Safely attach a listener even if the element doesn't exist (e.g. index.html
+// and app.js briefly out of sync during a deploy) — logs a warning instead of
+// throwing and halting the rest of this script's top-level setup.
+function on(id, event, handler) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`[app.js] Element #${id} not found — its "${event}" handler was not attached. ` +
+      `This usually means index.html is out of date relative to app.js.`);
+    return;
+  }
+  el.addEventListener(event, handler);
+}
+
 // ---------- Utilities ----------
 function getPath(obj, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
@@ -137,7 +150,7 @@ function showApp() {
   document.getElementById('app-screen').hidden = false;
   loadSites();
 }
-document.getElementById('login-form').addEventListener('submit', async (e) => {
+on('login-form', 'submit', async (e) => {
   e.preventDefault();
   const password = document.getElementById('password').value;
   const errEl = document.getElementById('login-error');
@@ -149,7 +162,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     errEl.hidden = false;
   }
 });
-document.getElementById('logout-btn').addEventListener('click', async () => {
+on('logout-btn', 'click', async () => {
   await api('/api/logout', { method: 'POST' });
   state.siteId = null; state.site = null;
   showLogin();
@@ -176,23 +189,23 @@ async function loadSite(id) {
   if (versionsPanel) versionsPanel.hidden = true;
   renderActiveTab();
 }
-document.getElementById('site-select').addEventListener('change', (e) => loadSite(e.target.value));
+on('site-select', 'change', (e) => loadSite(e.target.value));
 
-document.getElementById('new-site-btn').addEventListener('click', async () => {
+on('new-site-btn', 'click', async () => {
   const name = prompt('Name this site (e.g. "Hospital Kuala Lumpur", "Site 2 - Penang"):', `Site ${state.sites.length + 1}`);
   if (!name || !name.trim()) return;
   const site = await api('/api/sites', { method: 'POST', body: JSON.stringify({ name: name.trim(), data: DEFAULT_SITE_DATA }) });
   await loadSites();
   await loadSite(site.id);
 });
-document.getElementById('rename-site-btn').addEventListener('click', async () => {
+on('rename-site-btn', 'click', async () => {
   if (!state.site) return;
   const name = prompt('Rename this site:', state.site.name);
   if (!name || !name.trim() || name.trim() === state.site.name) return;
   await api(`/api/sites/${state.siteId}`, { method: 'PUT', body: JSON.stringify({ name: name.trim() }) });
   await loadSites();
 });
-document.getElementById('delete-site-btn').addEventListener('click', async () => {
+on('delete-site-btn', 'click', async () => {
   if (!state.site) return;
   if (!confirm(`Delete "${state.site.name}"? This cannot be undone.`)) return;
   await api(`/api/sites/${state.siteId}`, { method: 'DELETE' });
@@ -201,7 +214,7 @@ document.getElementById('delete-site-btn').addEventListener('click', async () =>
 });
 
 // ---------- Version history ----------
-document.getElementById('save-version-btn').addEventListener('click', async () => {
+on('save-version-btn', 'click', async () => {
   if (!state.site) return;
   const label = prompt('Name this version (e.g. "Initial draft", "After vendor negotiation"):');
   if (!label || !label.trim()) return;
@@ -211,7 +224,7 @@ document.getElementById('save-version-btn').addEventListener('click', async () =
   setTimeout(() => { if (statusEl.textContent === 'Version saved') statusEl.textContent = ''; }, 2000);
 });
 
-document.getElementById('versions-btn').addEventListener('click', async () => {
+on('versions-btn', 'click', async () => {
   const panel = document.getElementById('versions-panel');
   if (!panel.hidden) { panel.hidden = true; return; }
   panel.hidden = false;
@@ -293,7 +306,7 @@ async function attemptSave(retryCount) {
 }
 
 // ---------- Tabs ----------
-document.getElementById('tabs').addEventListener('click', (e) => {
+on('tabs', 'click', (e) => {
   const btn = e.target.closest('.tab-btn');
   if (!btn) return;
   document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -353,14 +366,14 @@ function handleFieldChange(e) {
   refreshComputed();
   scheduleSave();
 }
-document.getElementById('tab-content').addEventListener('input', handleFieldChange);
-document.getElementById('tab-content').addEventListener('change', (e) => {
+on('tab-content', 'input', handleFieldChange);
+on('tab-content', 'change', (e) => {
   if (e.target.tagName === 'SELECT') handleFieldChange(e);
 });
 
 // Delegated click handler for calculator sub-tabs and dynamic list rows (add/remove
 // general solvents, freight items, links)
-document.getElementById('tab-content').addEventListener('click', (e) => {
+on('tab-content', 'click', (e) => {
   const subtabBtn = e.target.closest('.subtab-btn');
   if (subtabBtn) {
     state.activeCalcSection = subtabBtn.dataset.calcsection;
@@ -1110,7 +1123,7 @@ async function renderDiscussion(container) {
       </form>
     </div>`;
   await loadDiscussion();
-  document.getElementById('discussion-form').addEventListener('submit', async (e) => {
+  on('discussion-form', 'submit', async (e) => {
     e.preventDefault();
     const author = document.getElementById('discussion-author').value;
     const message = document.getElementById('discussion-message').value;
@@ -1151,8 +1164,8 @@ function closeLightbox() {
   document.getElementById('lightbox-img').src = '';
   overlay.hidden = true;
 }
-document.getElementById('lightbox-overlay').addEventListener('click', closeLightbox);
-document.getElementById('lightbox-close').addEventListener('click', (e) => { e.stopPropagation(); closeLightbox(); });
+on('lightbox-overlay', 'click', closeLightbox);
+on('lightbox-close', 'click', (e) => { e.stopPropagation(); closeLightbox(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
 // Delegated: any image with data-lightbox-src opens the lightbox on click, from anywhere in the app.
 document.addEventListener('click', (e) => {
