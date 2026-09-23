@@ -101,6 +101,13 @@ const DEFAULT_SITE_DATA = {
       { name: 'Isopropanol (IPA, general instrument maintenance)', qty: 4, costPerUnit: 40 },
     ],
   },
+  consumables: {
+    items: [
+      { name: 'Pipette tips', qty: 10, costPerUnit: 15 },
+      { name: 'Sample collection tubes', qty: 300, costPerUnit: 0.5 },
+      { name: 'Gloves (box)', qty: 5, costPerUnit: 12 },
+    ],
+  },
   freightTax: {
     freightItems: [],
     taxRate: 0.06,
@@ -165,6 +172,8 @@ async function loadSite(id) {
   state.siteId = id;
   document.getElementById('site-select').value = id;
   state.site = await api(`/api/sites/${id}`);
+  const versionsPanel = document.getElementById('versions-panel');
+  if (versionsPanel) versionsPanel.hidden = true;
   renderActiveTab();
 }
 document.getElementById('site-select').addEventListener('change', (e) => loadSite(e.target.value));
@@ -191,6 +200,71 @@ document.getElementById('delete-site-btn').addEventListener('click', async () =>
   await loadSites();
 });
 
+// ---------- Version history ----------
+document.getElementById('save-version-btn').addEventListener('click', async () => {
+  if (!state.site) return;
+  const label = prompt('Name this version (e.g. "Initial draft", "After vendor negotiation"):');
+  if (!label || !label.trim()) return;
+  await api(`/api/sites/${state.siteId}/versions`, { method: 'POST', body: JSON.stringify({ label: label.trim() }) });
+  const statusEl = document.getElementById('save-status');
+  statusEl.textContent = 'Version saved';
+  setTimeout(() => { if (statusEl.textContent === 'Version saved') statusEl.textContent = ''; }, 2000);
+});
+
+document.getElementById('versions-btn').addEventListener('click', async () => {
+  const panel = document.getElementById('versions-panel');
+  if (!panel.hidden) { panel.hidden = true; return; }
+  panel.hidden = false;
+  await loadVersionsPanel();
+});
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('versions-panel');
+  if (panel.hidden) return;
+  if (e.target.closest('#versions-panel') || e.target.closest('#versions-btn')) return;
+  panel.hidden = true;
+});
+async function loadVersionsPanel() {
+  const panel = document.getElementById('versions-panel');
+  if (!state.site) { panel.innerHTML = '<div class="empty-note">No site selected.</div>'; return; }
+  panel.innerHTML = '<div class="empty-note">Loading\u2026</div>';
+  try {
+    const versions = await api(`/api/sites/${state.siteId}/versions`);
+    if (versions.length === 0) {
+      panel.innerHTML = '<div class="empty-note">No saved versions yet \u2014 click "Save Version" to create one.</div>';
+      return;
+    }
+    panel.innerHTML = versions.map((v) => `
+      <div class="version-row">
+        <div class="version-info">
+          <div class="version-label" title="${escapeHtml(v.label)}">${escapeHtml(v.label)}</div>
+          <div class="version-date">${new Date(v.created_at).toLocaleString()}</div>
+        </div>
+        <div class="version-actions">
+          <button type="button" data-restore-version="${v.id}">Restore</button>
+          <button type="button" data-delete-version="${v.id}">Delete</button>
+        </div>
+      </div>`).join('');
+    panel.querySelectorAll('[data-restore-version]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Restore this version? Your current unsaved-version changes for this site will be overwritten.')) return;
+        const updatedSite = await api(`/api/sites/${state.siteId}/versions/${btn.dataset.restoreVersion}/restore`, { method: 'POST' });
+        state.site = updatedSite;
+        document.getElementById('versions-panel').hidden = true;
+        renderActiveTab();
+      });
+    });
+    panel.querySelectorAll('[data-delete-version]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this saved version? This cannot be undone.')) return;
+        await api(`/api/sites/${state.siteId}/versions/${btn.dataset.deleteVersion}`, { method: 'DELETE' });
+        await loadVersionsPanel();
+      });
+    });
+  } catch (err) {
+    panel.innerHTML = `<div class="empty-note">Could not load versions: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -200,16 +274,22 @@ function scheduleSave() {
   const statusEl = document.getElementById('save-status');
   statusEl.textContent = 'Saving\u2026';
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(async () => {
-    try {
-      await api(`/api/sites/${state.siteId}`, { method: 'PUT', body: JSON.stringify({ data: state.site.data }) });
-      statusEl.textContent = 'All changes saved';
-      setTimeout(() => { if (statusEl.textContent === 'All changes saved') statusEl.textContent = ''; }, 2000);
-    } catch (err) {
-      statusEl.textContent = 'Save failed \u2014 retrying\u2026';
-      scheduleSave();
+  state.saveTimer = setTimeout(() => attemptSave(0), 700);
+}
+async function attemptSave(retryCount) {
+  const statusEl = document.getElementById('save-status');
+  try {
+    await api(`/api/sites/${state.siteId}`, { method: 'PUT', body: JSON.stringify({ data: state.site.data }) });
+    statusEl.textContent = 'All changes saved';
+    setTimeout(() => { if (statusEl.textContent === 'All changes saved') statusEl.textContent = ''; }, 2000);
+  } catch (err) {
+    if (retryCount < 5) {
+      statusEl.textContent = `Temporary connection issue \u2014 retrying (${retryCount + 1}/5)\u2026`;
+      setTimeout(() => attemptSave(retryCount + 1), 1500 * (retryCount + 1));
+    } else {
+      statusEl.textContent = 'Save failed \u2014 check your connection and try editing again.';
     }
-  }, 700);
+  }
 }
 
 // ---------- Tabs ----------
@@ -241,6 +321,7 @@ const CALC_SECTIONS = [
   { key: 'reagents', label: 'Reagents', render: renderReagents },
   { key: 'column', label: 'Column', render: renderColumn },
   { key: 'solvents', label: 'Solvents & Acid', render: renderSolvents },
+  { key: 'consumables', label: 'Consumables', render: renderConsumables },
   { key: 'summary', label: 'Summary', render: renderSummary },
   { key: 'freightTax', label: 'Freight & Tax', render: renderFreightTax },
 ];
@@ -300,6 +381,23 @@ document.getElementById('tab-content').addEventListener('click', (e) => {
   if (removeSolvent) {
     const i = parseInt(removeSolvent.dataset.removeGeneralSolvent, 10);
     state.site.data.solvents.generalSolvents.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const addConsumable = e.target.closest('#add-consumable-btn');
+  if (addConsumable) {
+    state.site.data.consumables = state.site.data.consumables || { items: [] };
+    state.site.data.consumables.items = state.site.data.consumables.items || [];
+    state.site.data.consumables.items.push({ name: '', qty: 0, costPerUnit: 0 });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeConsumable = e.target.closest('[data-remove-consumable]');
+  if (removeConsumable) {
+    const i = parseInt(removeConsumable.dataset.removeConsumable, 10);
+    state.site.data.consumables.items.splice(i, 1);
     renderActiveTab();
     scheduleSave();
     return;
@@ -594,6 +692,33 @@ function renderColumn(container, data) {
     </div>`;
 }
 
+// ---------- Consumables ----------
+function renderConsumables(container, data) {
+  data.consumables = data.consumables || { items: [] };
+  data.consumables.items = data.consumables.items || [];
+  const items = data.consumables.items;
+  container.innerHTML = `
+    <div class="card">
+      <h2>General Lab Consumables <span style="font-weight:normal;font-size:12px;">(enter quantity and unit cost directly, not formula-driven)</span></h2>
+      <table class="calc-table">
+        <thead><tr><th>Item</th><th>Quantity</th><th>Cost per unit ($)</th><th>Total cost ($)</th><th></th></tr></thead>
+        <tbody>
+          ${items.map((it, i) => `<tr>
+            <td class="label-cell"><input type="text" data-path="consumables.items.${i}.name" value="${escapeHtml(it.name)}" style="text-align:left;width:100%;" placeholder="e.g. Pipette tips" /></td>
+            <td><input type="number" step="any" data-path="consumables.items.${i}.qty" data-type="number" value="${it.qty}" /></td>
+            <td><input type="number" step="any" data-path="consumables.items.${i}.costPerUnit" data-type="number" value="${it.costPerUnit}" /></td>
+            <td class="computed" data-out="consumablesCalc.items.${i}.totalCost" data-fmt="cur">\u2014</td>
+            <td><button type="button" class="btn-remove-row" data-remove-consumable="${i}" title="Remove">\u2715</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" id="add-consumable-btn" class="btn-add-row">+ Add consumable</button>
+      <div class="field-row" style="margin-top:10px;"><label>Consumables subtotal</label>
+        <span data-out="consumablesCalc.totalCost" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
+      <p class="note">Anything not already covered elsewhere \u2014 pipette tips, sample tubes, gloves, filters, etc. Not tied to sample count since usage varies by lab practice; just estimate total quantity needed for the whole project.</p>
+    </div>`;
+}
+
 // ---------- Solvents & Acid ----------
 function renderSolvents(container, data) {
   const s = data.solvents;
@@ -711,6 +836,7 @@ function renderSummary(container) {
       <div class="summary-box"><div class="label">Calibrator &amp; QC Prep</div><div class="amount" data-out="summary.calPrepTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Column &amp; Guard</div><div class="amount" data-out="summary.columnTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Solvents &amp; Acid</div><div class="amount" data-out="summary.solventsTotal" data-fmt="cur">\u2014</div></div>
+      <div class="summary-box"><div class="label">Consumables</div><div class="amount" data-out="summary.consumablesTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box grand"><div class="label">SUBTOTAL (before freight &amp; tax)</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">\u2014</div></div>
     </div>
     <div class="card">
@@ -734,6 +860,7 @@ function renderSummaryChartIfActive(computed) {
     { label: 'Calibrator Prep', value: computed.summary.calPrepTotal },
     { label: 'Column', value: computed.summary.columnTotal },
     { label: 'Solvents', value: computed.summary.solventsTotal },
+    { label: 'Consumables', value: computed.summary.consumablesTotal },
   ];
   const max = Math.max(...cats.map((c) => c.value), 1);
   chartEl.innerHTML = cats.map((c) => `
