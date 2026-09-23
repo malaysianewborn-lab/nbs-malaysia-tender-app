@@ -9,6 +9,8 @@ const cors = require('cors');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const { computeAll } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
+const { buildExcelReport, buildPdfReport } = require('./reports.js');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB cap
 
@@ -310,6 +312,26 @@ app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, async (req, re
     .eq('site_id', req.params.siteId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+});
+
+// ---------- Report export (Excel & PDF) ----------
+app.get('/api/sites/:id/export/excel', requireAuth, async (req, res) => {
+  const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
+  if (error || !site) return res.status(404).json({ error: 'Site not found' });
+  const computed = computeAll(site.data);
+  const buffer = await buildExcelReport(site, computed);
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.xlsx"`);
+  res.send(Buffer.from(buffer));
+});
+
+app.get('/api/sites/:id/export/pdf', requireAuth, async (req, res) => {
+  const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
+  if (error || !site) return res.status(404).json({ error: 'Site not found' });
+  const computed = computeAll(site.data);
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.pdf"`);
+  buildPdfReport(site, computed, res);
 });
 
 // ---------- Static front-end ----------
