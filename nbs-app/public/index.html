@@ -32,6 +32,18 @@
       <button id="new-site-btn" class="btn-secondary">+ New Site</button>
       <button id="rename-site-btn" class="btn-secondary">Rename</button>
       <button id="delete-site-btn" class="btn-danger">Delete</button>
+      <span class="version-controls-wrap">
+        <button id="save-version-btn" class="btn-secondary">Save Version</button>
+        <button id="versions-btn" class="btn-secondary">Versions</button>
+        <div id="versions-panel" class="versions-panel" hidden></div>
+      </span>
+      <span class="export-controls-wrap">
+        <button id="export-btn" class="btn-secondary">Export Report</button>
+        <div id="export-panel" class="versions-panel export-panel" hidden>
+          <button type="button" id="export-excel-btn" class="export-option">Download as Excel (.xlsx)</button>
+          <button type="button" id="export-pdf-btn" class="export-option">Download as PDF</button>
+        </div>
+      </span>
       <span id="save-status" class="save-status"></span>
       <button id="logout-btn" class="btn-secondary">Log out</button>
     </div>
