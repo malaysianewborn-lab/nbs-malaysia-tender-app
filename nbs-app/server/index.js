@@ -33,6 +33,24 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+// Supabase's newer sb_secret_ key format has a known, currently-open platform
+// bug (github.com/supabase/supabase#50651): their internal gateway mints a
+// short-lived token per request, and an occasional clock-skew between two of
+// THEIR OWN backend components rejects it with "JWT issued at future". It's
+// transient and self-clears within a couple of seconds — retrying is the
+// only mitigation available until Supabase ships a fix on their end.
+async function withRetry(queryFn, { retries = 2, delayMs = 1200 } = {}) {
+  let lastResult;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    lastResult = await queryFn();
+    const isTransientJwtSkew = lastResult.error
+      && /jwt issued at future/i.test(lastResult.error.message || '');
+    if (!lastResult.error || !isTransientJwtSkew) return lastResult;
+    if (attempt < retries) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return lastResult;
+}
+
 const app = express();
 app.set('trust proxy', true); // Render's proxy chain — trust all hops so req.secure reflects the real (HTTPS) client connection
 app.set('etag', false); // belt-and-suspenders alongside Cache-Control: no-store below — API responses should never be conditionally cached/revalidated
@@ -105,11 +123,11 @@ app.post('/api/sites', requireAuth, async (req, res) => {
 });
 
 app.get('/api/sites/:id', requireAuth, async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('sites')
     .select('*')
     .eq('id', req.params.id)
-    .single();
+    .single());
   if (error) return res.status(404).json({ error: error.message });
   res.json(data);
 });
@@ -119,12 +137,12 @@ app.put('/api/sites/:id', requireAuth, async (req, res) => {
   const patch = {};
   if (typeof name === 'string' && name.trim()) patch.name = name.trim();
   if (newData !== undefined) patch.data = newData;
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('sites')
     .update(patch)
     .eq('id', req.params.id)
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -229,6 +247,66 @@ app.delete('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => 
     .from('supporting_files')
     .delete()
     .eq('id', req.params.fileId)
+    .eq('site_id', req.params.siteId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ---------- Version history ----------
+// Saves a full, named snapshot of a site's data at a point in time. Restoring
+// overwrites the site's current data with that snapshot (the site itself,
+// discussion, and version list are untouched).
+app.get('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('site_versions')
+    .select('id, label, created_at')
+    .eq('site_id', req.params.siteId)
+    .order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+app.post('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
+  const { label } = req.body || {};
+  if (!label || !label.trim()) return res.status(400).json({ error: 'A version label is required' });
+  const { data: site, error: siteErr } = await supabase
+    .from('sites')
+    .select('data')
+    .eq('id', req.params.siteId)
+    .single();
+  if (siteErr || !site) return res.status(404).json({ error: 'Site not found' });
+  const { error } = await supabase.from('site_versions').insert({
+    site_id: req.params.siteId,
+    label: label.trim(),
+    data: site.data,
+  });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.post('/api/sites/:siteId/versions/:versionId/restore', requireAuth, async (req, res) => {
+  const { data: version, error: verErr } = await supabase
+    .from('site_versions')
+    .select('data')
+    .eq('id', req.params.versionId)
+    .eq('site_id', req.params.siteId)
+    .single();
+  if (verErr || !version) return res.status(404).json({ error: 'Version not found' });
+  const { data: updated, error } = await supabase
+    .from('sites')
+    .update({ data: version.data })
+    .eq('id', req.params.siteId)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(updated);
+});
+
+app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, async (req, res) => {
+  const { error } = await supabase
+    .from('site_versions')
+    .delete()
+    .eq('id', req.params.versionId)
     .eq('site_id', req.params.siteId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
