@@ -236,6 +236,29 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#versions-panel') || e.target.closest('#versions-btn')) return;
   panel.hidden = true;
 });
+
+// ---------- Report export ----------
+on('export-btn', 'click', () => {
+  const panel = document.getElementById('export-panel');
+  panel.hidden = !panel.hidden;
+});
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('export-panel');
+  if (panel.hidden) return;
+  if (e.target.closest('#export-panel') || e.target.closest('#export-btn')) return;
+  panel.hidden = true;
+});
+on('export-excel-btn', 'click', () => {
+  if (!state.siteId) return;
+  window.location.href = `/api/sites/${state.siteId}/export/excel`;
+  document.getElementById('export-panel').hidden = true;
+});
+on('export-pdf-btn', 'click', () => {
+  if (!state.siteId) return;
+  window.location.href = `/api/sites/${state.siteId}/export/pdf`;
+  document.getElementById('export-panel').hidden = true;
+});
+
 async function loadVersionsPanel() {
   const panel = document.getElementById('versions-panel');
   if (!state.site) { panel.innerHTML = '<div class="empty-note">No site selected.</div>'; return; }
