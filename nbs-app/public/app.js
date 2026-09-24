@@ -29,12 +29,34 @@ function setPath(obj, path, value) {
   for (let i = 0; i < keys.length - 1; i++) o = o[keys[i]];
   o[keys[keys.length - 1]] = value;
 }
+const CURRENCIES = [
+  { code: 'USD', symbol: '$', label: 'US Dollar (USD, $)' },
+  { code: 'MYR', symbol: 'RM', label: 'Malaysian Ringgit (MYR, RM)' },
+  { code: 'SGD', symbol: 'S$', label: 'Singapore Dollar (SGD, S$)' },
+  { code: 'EUR', symbol: '\u20ac', label: 'Euro (EUR, \u20ac)' },
+  { code: 'GBP', symbol: '\u00a3', label: 'British Pound (GBP, \u00a3)' },
+  { code: 'AUD', symbol: 'A$', label: 'Australian Dollar (AUD, A$)' },
+  { code: 'JPY', symbol: '\u00a5', label: 'Japanese Yen (JPY, \u00a5)' },
+  { code: 'CNY', symbol: '\u00a5', label: 'Chinese Yuan (CNY, \u00a5)' },
+  { code: 'INR', symbol: '\u20b9', label: 'Indian Rupee (INR, \u20b9)' },
+  { code: 'IDR', symbol: 'Rp', label: 'Indonesian Rupiah (IDR, Rp)' },
+  { code: 'THB', symbol: '\u0e3f', label: 'Thai Baht (THB, \u0e3f)' },
+  { code: 'VND', symbol: '\u20ab', label: 'Vietnamese Dong (VND, \u20ab)' },
+];
+function currentCurrencySymbol() {
+  const code = (state.site && state.site.data && state.site.data.currency && state.site.data.currency.code) || 'USD';
+  const found = CURRENCIES.find((c) => c.code === code);
+  return found ? found.symbol : '$';
+}
+// Short parenthesised label for table headers, e.g. "($)" or "(RM)"
+function curLabel() { return `(${currentCurrencySymbol()})`; }
+
 function fmt(value, kind) {
   if (value === undefined || value === null || Number.isNaN(value)) return '\u2014';
   switch (kind) {
     case 'int': return Math.round(value).toLocaleString();
     case 'num2': return Number(value).toFixed(2);
-    case 'cur': return '$' + Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    case 'cur': return currentCurrencySymbol() + Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case 'pct': return (Number(value) * 100).toFixed(2) + '%';
     default: return String(value);
   }
@@ -55,6 +77,7 @@ async function api(path, options = {}) {
 }
 
 const DEFAULT_SITE_DATA = {
+  currency: { code: 'MYR', symbol: 'RM' },
   batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 8, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
   lcGradient: [
     { no: 1, time: 0.00, flow: 0.600, a: 90, b: 10, shape: 'Initial' },
@@ -185,11 +208,27 @@ async function loadSite(id) {
   state.siteId = id;
   document.getElementById('site-select').value = id;
   state.site = await api(`/api/sites/${id}`);
+  state.site.data.currency = state.site.data.currency || { code: 'USD', symbol: '$' };
+  const currencySelect = document.getElementById('currency-select');
+  if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
   if (versionsPanel) versionsPanel.hidden = true;
   renderActiveTab();
 }
 on('site-select', 'change', (e) => loadSite(e.target.value));
+
+// Populate the currency dropdown once (options are static; only the selected value changes per site)
+const currencySelectEl = document.getElementById('currency-select');
+if (currencySelectEl) {
+  currencySelectEl.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}">${escapeHtml(c.label)}</option>`).join('');
+}
+on('currency-select', 'change', (e) => {
+  if (!state.site) return;
+  const chosen = CURRENCIES.find((c) => c.code === e.target.value) || CURRENCIES[0];
+  state.site.data.currency = { code: chosen.code, symbol: chosen.symbol };
+  renderActiveTab();
+  scheduleSave();
+});
 
 on('new-site-btn', 'click', async () => {
   const name = prompt('Name this site (e.g. "Hospital Kuala Lumpur", "Site 2 - Penang"):', `Site ${state.sites.length + 1}`);
@@ -635,7 +674,7 @@ function renderCalibratorPrep(container, data) {
     <div class="card">
       <h2>Cost of Calibration Consumables</h2>
       <table class="calc-table">
-        <thead><tr><th>Material</th><th>Vial/bottle size (\u00b5L)</th><th>Dead/waste vol. (\u00b5L)</th><th>Usable volume</th><th>Units needed</th><th>Cost per unit ($)</th><th>Total cost ($)</th><th>Cost/batch ($)</th></tr></thead>
+        <thead><tr><th>Material</th><th>Vial/bottle size (\u00b5L)</th><th>Dead/waste vol. (\u00b5L)</th><th>Usable volume</th><th>Units needed</th><th>Cost per unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th>Cost/batch ${curLabel()}</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell">Amino Acid Standard (raw stock, \u00b5L)</td>
@@ -661,7 +700,7 @@ function renderReagents(container, data) {
     <div class="card">
       <h2>Reagent Cost Build-Up \u2014 Internal Standard &amp; QC Material</h2>
       <table class="calc-table">
-        <thead><tr><th>Component</th><th>Vol/use (\u00b5L)</th><th>Uses/batch</th><th>Vial size (\u00b5L)</th><th>Dead vol. (\u00b5L)</th><th>Usable vol.</th><th>Vials needed</th><th>Cost/vial ($)</th><th>Total cost ($)</th><th>Cost/sample ($)</th></tr></thead>
+        <thead><tr><th>Component</th><th>Vol/use (\u00b5L)</th><th>Uses/batch</th><th>Vial size (\u00b5L)</th><th>Dead vol. (\u00b5L)</th><th>Usable vol.</th><th>Vials needed</th><th>Cost/vial ${curLabel()}</th><th>Total cost ${curLabel()}</th><th>Cost/sample ${curLabel()}</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell">Internal Standard (IS)</td>
@@ -701,7 +740,7 @@ function renderColumn(container, data) {
     <div class="card">
       <h2>Analytical Column &amp; Guard Column Cost</h2>
       <table class="calc-table">
-        <thead><tr><th>Component</th><th>Cost/unit ($)</th><th>Rated lifetime (samples)</th><th>Total samples needed</th><th>Units needed</th><th>Total cost ($)</th><th>Cost/sample ($)</th></tr></thead>
+        <thead><tr><th>Component</th><th>Cost/unit ${curLabel()}</th><th>Rated lifetime (samples)</th><th>Total samples needed</th><th>Units needed</th><th>Total cost ${curLabel()}</th><th>Cost/sample ${curLabel()}</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell"><input type="text" data-path="column.analytical.label" value="${escapeHtml(c.analytical.label)}" style="text-align:left;width:100%;" /></td>
@@ -737,7 +776,7 @@ function renderConsumables(container, data) {
     <div class="card">
       <h2>General Lab Consumables <span style="font-weight:normal;font-size:12px;">(enter quantity and unit cost directly, not formula-driven)</span></h2>
       <table class="calc-table">
-        <thead><tr><th>Item</th><th>Quantity</th><th>Cost per unit ($)</th><th>Total cost ($)</th><th></th></tr></thead>
+        <thead><tr><th>Item</th><th>Quantity</th><th>Cost per unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th></th></tr></thead>
         <tbody>
           ${items.map((it, i) => `<tr>
             <td class="label-cell"><input type="text" data-path="consumables.items.${i}.name" value="${escapeHtml(it.name)}" style="text-align:left;width:100%;" placeholder="e.g. Pipette tips" /></td>
@@ -768,7 +807,7 @@ function renderSolvents(container, data) {
         <input type="number" step="any" style="width:70px" data-path="solvents.pfheptaConc" data-type="pct" value="${(s.pfheptaConc * 100).toFixed(3)}" /> %
       </div>
       <table class="calc-table">
-        <thead><tr><th>Component</th><th>Vol/sample (mL)</th><th>Total samples</th><th>Vol required (mL)</th><th>Bottle size (mL)</th><th>Dead vol. (mL)</th><th>Usable vol.</th><th>Bottles needed</th><th>Cost/bottle ($)</th><th>Total cost ($)</th><th>Cost/sample ($)</th></tr></thead>
+        <thead><tr><th>Component</th><th>Vol/sample (mL)</th><th>Total samples</th><th>Vol required (mL)</th><th>Bottle size (mL)</th><th>Dead vol. (mL)</th><th>Usable vol.</th><th>Bottles needed</th><th>Cost/bottle ${curLabel()}</th><th>Total cost ${curLabel()}</th><th>Cost/sample ${curLabel()}</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell">Water (Mobile Phase A2)</td>
@@ -818,7 +857,7 @@ function renderSolvents(container, data) {
     <div class="card">
       <h2>Calibrator Dilution Methanol <span style="font-weight:normal;font-size:12px;">(per-batch consumable, linked from Calibrator &amp; QC Prep tab)</span></h2>
       <table class="calc-table">
-        <thead><tr><th>Component</th><th>Vol/batch (mL)</th><th>Batches</th><th>Vol required (mL)</th><th>Bottle size (mL)</th><th>Dead vol. (mL)</th><th>Usable vol.</th><th>Bottles needed</th><th>Cost/bottle ($)</th><th>Total cost ($)</th><th>Cost/batch ($)</th></tr></thead>
+        <thead><tr><th>Component</th><th>Vol/batch (mL)</th><th>Batches</th><th>Vol required (mL)</th><th>Bottle size (mL)</th><th>Dead vol. (mL)</th><th>Usable vol.</th><th>Bottles needed</th><th>Cost/bottle ${curLabel()}</th><th>Total cost ${curLabel()}</th><th>Cost/batch ${curLabel()}</th></tr></thead>
         <tbody>
           <tr>
             <td class="label-cell">Methanol (calibrator serial dilution diluent)</td>
@@ -841,7 +880,7 @@ function renderSolvents(container, data) {
     <div class="card">
       <h2>General Lab &amp; Maintenance Solvents <span style="font-weight:normal;font-size:12px;">(enter bottles/units directly, not formula-driven)</span></h2>
       <table class="calc-table">
-        <thead><tr><th>Component</th><th>Bottles/units needed</th><th>Cost per bottle/unit ($)</th><th>Total cost ($)</th><th></th></tr></thead>
+        <thead><tr><th>Component</th><th>Bottles/units needed</th><th>Cost per bottle/unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th></th></tr></thead>
         <tbody id="general-solvents-tbody">
           ${(s.generalSolvents || []).map((g, i) => `<tr>
             <td class="label-cell"><input type="text" data-path="solvents.generalSolvents.${i}.name" value="${escapeHtml(g.name)}" style="text-align:left;width:100%;" /></td>
@@ -920,7 +959,7 @@ function renderFreightTax(container, data) {
     <div class="card">
       <h2>Freight Charges <span style="font-weight:normal;font-size:12px;">(add a row whenever you get a quote \u2014 leave empty until then)</span></h2>
       <table class="calc-table">
-        <thead><tr><th>Description</th><th>Amount ($)</th><th></th></tr></thead>
+        <thead><tr><th>Description</th><th>Amount ${curLabel()}</th><th></th></tr></thead>
         <tbody id="freight-tbody">
           ${(ft.freightItems || []).map((f, i) => `<tr>
             <td class="label-cell"><input type="text" data-path="freightTax.freightItems.${i}.description" value="${escapeHtml(f.description)}" style="text-align:left;width:100%;" placeholder="e.g. International courier, customs clearance..." /></td>
@@ -945,9 +984,9 @@ function renderFreightTax(container, data) {
           <option value="false" ${!ft.applyTaxToFreight ? 'selected' : ''}>No</option>
         </select>
         <span class="hint">Many customs/import taxes are charged on goods value + freight (CIF)</span></div>
-      <div class="field-row"><label>Taxable base ($)</label>
+      <div class="field-row"><label>Taxable base ${curLabel()}</label>
         <span data-out="freightTaxCalc.taxableBase" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
-      <div class="field-row"><label>Tax amount ($)</label>
+      <div class="field-row"><label>Tax amount ${curLabel()}</label>
         <span data-out="freightTaxCalc.taxAmount" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
     </div>
     <div class="summary-grid">
@@ -957,9 +996,9 @@ function renderFreightTax(container, data) {
       <div class="summary-box grand"><div class="label">FINAL TOTAL</div><div class="amount" data-out="freightTaxCalc.finalTotal" data-fmt="cur">\u2014</div></div>
     </div>
     <div class="card">
-      <div class="field-row"><label>Final cost per batch ($)</label>
+      <div class="field-row"><label>Final cost per batch ${curLabel()}</label>
         <span data-out="freightTaxCalc.finalCostPerBatch" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
-      <div class="field-row"><label>Final cost per study sample ($)</label>
+      <div class="field-row"><label>Final cost per study sample ${curLabel()}</label>
         <span data-out="freightTaxCalc.finalCostPerSample" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
     </div>`;
 }
