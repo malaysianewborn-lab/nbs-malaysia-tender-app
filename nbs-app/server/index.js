@@ -115,10 +115,10 @@ app.get('/api/session', (req, res) => {
 
 // ---------- Sites ----------
 app.get('/api/sites', requireAuth, asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('sites')
     .select('id, name, created_at, updated_at')
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true }));
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -126,11 +126,11 @@ app.get('/api/sites', requireAuth, asyncHandler(async (req, res) => {
 app.post('/api/sites', requireAuth, asyncHandler(async (req, res) => {
   const { name, data: initialData } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Site name is required' });
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('sites')
     .insert({ name: name.trim(), data: initialData || {} })
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -161,18 +161,18 @@ app.put('/api/sites/:id', requireAuth, asyncHandler(async (req, res) => {
 }));
 
 app.delete('/api/sites/:id', requireAuth, asyncHandler(async (req, res) => {
-  const { error } = await supabase.from('sites').delete().eq('id', req.params.id);
+  const { error } = await withRetry(() => supabase.from('sites').delete().eq('id', req.params.id));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
 
 // ---------- Discussion ----------
 app.get('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('discussion_messages')
     .select('*')
     .eq('site_id', req.params.id)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true }));
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -180,7 +180,7 @@ app.get('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res) 
 app.post('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res) => {
   const { author, message } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ error: 'Message is required' });
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('discussion_messages')
     .insert({
       site_id: req.params.id,
@@ -188,17 +188,17 @@ app.post('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res)
       message: message.trim(),
     })
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
 
 app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, asyncHandler(async (req, res) => {
-  const { error } = await supabase
+  const { error } = await withRetry(() => supabase
     .from('discussion_messages')
     .delete()
     .eq('id', req.params.msgId)
-    .eq('site_id', req.params.siteId);
+    .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
@@ -213,13 +213,15 @@ const IMAGE_ONLY_CATEGORIES = ['image', 'supporting_picture'];
 
 app.get('/api/sites/:siteId/files', requireAuth, asyncHandler(async (req, res) => {
   const category = req.query.category;
-  let query = supabase
-    .from('supporting_files')
-    .select('id, filename, mime_type, file_size, category, folder_id, uploaded_at')
-    .eq('site_id', req.params.siteId)
-    .order('uploaded_at', { ascending: false });
-  if (category) query = query.eq('category', category);
-  const { data, error } = await query;
+  const { data, error } = await withRetry(() => {
+    let query = supabase
+      .from('supporting_files')
+      .select('id, filename, mime_type, file_size, category, folder_id, uploaded_at')
+      .eq('site_id', req.params.siteId)
+      .order('uploaded_at', { ascending: false });
+    if (category) query = query.eq('category', category);
+    return query;
+  });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -232,7 +234,7 @@ app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), asyncHa
   }
   // folder_id is optional — an upload made while a folder is "open" lands directly in it
   const folderId = req.body.folder_id && req.body.folder_id !== 'null' ? req.body.folder_id : null;
-  const { error } = await supabase.from('supporting_files').insert({
+  const { error } = await withRetry(() => supabase.from('supporting_files').insert({
     site_id: req.params.siteId,
     category,
     folder_id: folderId,
@@ -240,7 +242,7 @@ app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), asyncHa
     mime_type: req.file.mimetype,
     file_size: req.file.size,
     file_data: req.file.buffer.toString('base64'),
-  });
+  }));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
@@ -248,22 +250,22 @@ app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), asyncHa
 // Move a file into a folder (or back to "no folder" with folder_id: null)
 app.put('/api/sites/:siteId/files/:fileId/move', requireAuth, asyncHandler(async (req, res) => {
   const { folder_id: folderId } = req.body || {};
-  const { error } = await supabase
+  const { error } = await withRetry(() => supabase
     .from('supporting_files')
     .update({ folder_id: folderId || null })
     .eq('id', req.params.fileId)
-    .eq('site_id', req.params.siteId);
+    .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
 
 app.get('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('supporting_files')
     .select('filename, mime_type, file_data')
     .eq('id', req.params.fileId)
     .eq('site_id', req.params.siteId)
-    .single();
+    .single());
   if (error || !data) return res.status(404).json({ error: 'File not found' });
   res.set('Content-Type', data.mime_type);
   res.set('Content-Disposition', `inline; filename="${encodeURIComponent(data.filename)}"`);
@@ -271,11 +273,11 @@ app.get('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req
 }));
 
 app.delete('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req, res) => {
-  const { error } = await supabase
+  const { error } = await withRetry(() => supabase
     .from('supporting_files')
     .delete()
     .eq('id', req.params.fileId)
-    .eq('site_id', req.params.siteId);
+    .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
@@ -285,13 +287,15 @@ app.delete('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (
 // and Supporting Info's "Quotation" section each keep their own folder list.
 app.get('/api/sites/:siteId/folders', requireAuth, asyncHandler(async (req, res) => {
   const category = req.query.category;
-  let query = supabase
-    .from('file_folders')
-    .select('id, name, category, created_at')
-    .eq('site_id', req.params.siteId)
-    .order('name', { ascending: true });
-  if (category) query = query.eq('category', category);
-  const { data, error } = await query;
+  const { data, error } = await withRetry(() => {
+    let query = supabase
+      .from('file_folders')
+      .select('id, name, category, created_at')
+      .eq('site_id', req.params.siteId)
+      .order('name', { ascending: true });
+    if (category) query = query.eq('category', category);
+    return query;
+  });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -300,11 +304,11 @@ app.post('/api/sites/:siteId/folders', requireAuth, asyncHandler(async (req, res
   const { name, category } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Folder name is required' });
   if (!VALID_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('file_folders')
     .insert({ site_id: req.params.siteId, category, name: name.trim() })
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -312,13 +316,13 @@ app.post('/api/sites/:siteId/folders', requireAuth, asyncHandler(async (req, res
 app.put('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(async (req, res) => {
   const { name } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Folder name is required' });
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('file_folders')
     .update({ name: name.trim() })
     .eq('id', req.params.folderId)
     .eq('site_id', req.params.siteId)
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -326,11 +330,11 @@ app.put('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(async 
 // Deleting a folder never deletes its files — they fall back to "no folder"
 // (the DB foreign key is ON DELETE SET NULL; see migration_8_folders.sql).
 app.delete('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(async (req, res) => {
-  const { error } = await supabase
+  const { error } = await withRetry(() => supabase
     .from('file_folders')
     .delete()
     .eq('id', req.params.folderId)
-    .eq('site_id', req.params.siteId);
+    .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
@@ -340,11 +344,11 @@ app.delete('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(asy
 // overwrites the site's current data with that snapshot (the site itself,
 // discussion, and version list are untouched).
 app.get('/api/sites/:siteId/versions', requireAuth, asyncHandler(async (req, res) => {
-  const { data, error } = await supabase
+  const { data, error } = await withRetry(() => supabase
     .from('site_versions')
     .select('id, label, created_at')
     .eq('site_id', req.params.siteId)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false }));
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 }));
@@ -352,45 +356,45 @@ app.get('/api/sites/:siteId/versions', requireAuth, asyncHandler(async (req, res
 app.post('/api/sites/:siteId/versions', requireAuth, asyncHandler(async (req, res) => {
   const { label } = req.body || {};
   if (!label || !label.trim()) return res.status(400).json({ error: 'A version label is required' });
-  const { data: site, error: siteErr } = await supabase
+  const { data: site, error: siteErr } = await withRetry(() => supabase
     .from('sites')
     .select('data')
     .eq('id', req.params.siteId)
-    .single();
+    .single());
   if (siteErr || !site) return res.status(404).json({ error: 'Site not found' });
-  const { error } = await supabase.from('site_versions').insert({
+  const { error } = await withRetry(() => supabase.from('site_versions').insert({
     site_id: req.params.siteId,
     label: label.trim(),
     data: site.data,
-  });
+  }));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
 
 app.post('/api/sites/:siteId/versions/:versionId/restore', requireAuth, asyncHandler(async (req, res) => {
-  const { data: version, error: verErr } = await supabase
+  const { data: version, error: verErr } = await withRetry(() => supabase
     .from('site_versions')
     .select('data')
     .eq('id', req.params.versionId)
     .eq('site_id', req.params.siteId)
-    .single();
+    .single());
   if (verErr || !version) return res.status(404).json({ error: 'Version not found' });
-  const { data: updated, error } = await supabase
+  const { data: updated, error } = await withRetry(() => supabase
     .from('sites')
     .update({ data: version.data })
     .eq('id', req.params.siteId)
     .select()
-    .single();
+    .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(updated);
 }));
 
 app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, asyncHandler(async (req, res) => {
-  const { error } = await supabase
+  const { error } = await withRetry(() => supabase
     .from('site_versions')
     .delete()
     .eq('id', req.params.versionId)
-    .eq('site_id', req.params.siteId);
+    .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 }));
