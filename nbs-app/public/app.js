@@ -1004,8 +1004,13 @@ function renderFreightTax(container, data) {
 }
 
 // ---------- Generic file upload/list/delete (shared by Tender Spec, Images, Supporting Info) ----------
+// Files can optionally be grouped into folders (scoped per site+category).
+// Uploads always land at the top level ("No folder"); use the per-file
+// "Move to" dropdown to file something into a folder afterwards.
 const MAX_FILE_MB = 20;
 const IMAGE_ONLY_CATEGORIES = ['image', 'supporting_picture'];
+const collapsedFolders = new Set(); // folder ids the user has collapsed, persists while the app stays open
+
 async function initFileSection(key, category, { imageGrid }) {
   await loadFileList(key, category, imageGrid);
   const form = document.getElementById(`upload-form-${key}`);
@@ -1033,45 +1038,127 @@ async function initFileSection(key, category, { imageGrid }) {
     }
   });
 }
+
+function fileRowHtml(f, key, category, imageGrid, folders) {
+  const moveOptions = [`<option value="" ${!f.folder_id ? 'selected' : ''}>No folder</option>`]
+    .concat(folders.map((fo) => `<option value="${fo.id}" ${f.folder_id === fo.id ? 'selected' : ''}>${escapeHtml(fo.name)}</option>`))
+    .join('');
+  const moveSelect = `<select class="folder-move-select" data-move-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Move to folder">${moveOptions}</select>`;
+  if (imageGrid) {
+    return `
+      <div class="image-tile">
+        <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" loading="lazy"
+             data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />
+        <div class="image-tile-meta">
+          <span title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
+          <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+        </div>
+        <div class="image-tile-move">${moveSelect}</div>
+      </div>`;
+  }
+  const isImage = (f.mime_type || '').startsWith('image/');
+  const thumb = isImage
+    ? `<img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" class="inline-thumb" loading="lazy"
+            data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />`
+    : '';
+  return `
+  <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      ${thumb}
+      <div style="min-width:0;">
+        <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">${escapeHtml(f.filename)}</a>
+        <div class="meta">${(f.file_size / 1024).toFixed(0)} KB \u2014 uploaded ${new Date(f.uploaded_at).toLocaleString()}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      ${moveSelect}
+      <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+    </div>
+  </div>`;
+}
+
 async function loadFileList(key, category, imageGrid) {
   const listEl = document.getElementById(`file-list-${key}`);
   if (!listEl) return;
   try {
-    const files = await api(`/api/sites/${state.siteId}/files?category=${encodeURIComponent(category)}`);
-    if (files.length === 0) {
-      listEl.innerHTML = '<p class="note">No files uploaded yet.</p>';
+    const [files, folders] = await Promise.all([
+      api(`/api/sites/${state.siteId}/files?category=${encodeURIComponent(category)}`),
+      api(`/api/sites/${state.siteId}/folders?category=${encodeURIComponent(category)}`),
+    ]);
+
+    const toolbarHtml = `<div class="folder-toolbar"><button type="button" class="btn-add-row" data-new-folder="${key}" data-folder-category="${category}">+ New Folder</button></div>`;
+
+    if (files.length === 0 && folders.length === 0) {
+      listEl.innerHTML = `${toolbarHtml}<p class="note">No files uploaded yet.</p>`;
+      wireFolderToolbar(listEl, key, category, imageGrid);
       return;
     }
-    if (imageGrid) {
-      listEl.innerHTML = files.map((f) => `
-        <div class="image-tile">
-          <img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" loading="lazy"
-               data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />
-          <div class="image-tile-meta">
-            <span title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
-            <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+
+    const byFolder = new Map(folders.map((fo) => [fo.id, []]));
+    const unfiled = [];
+    files.forEach((f) => {
+      if (f.folder_id && byFolder.has(f.folder_id)) byFolder.get(f.folder_id).push(f);
+      else unfiled.push(f);
+    });
+
+    const folderSectionsHtml = folders.map((fo) => {
+      const items = byFolder.get(fo.id) || [];
+      const collapsed = collapsedFolders.has(fo.id);
+      const itemsHtml = items.length
+        ? (imageGrid ? `<div class="image-grid">${items.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join('')}</div>`
+                     : items.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join(''))
+        : '<p class="note" style="margin:6px 0 0;">Empty folder.</p>';
+      return `
+        <div class="file-folder">
+          <div class="file-folder-header" data-toggle-folder="${fo.id}">
+            <span class="folder-toggle-icon">${collapsed ? '\u25b8' : '\u25be'}</span>
+            <span class="folder-icon">\ud83d\udcc1</span>
+            <span class="folder-name">${escapeHtml(fo.name)}</span>
+            <span class="folder-count">${items.length}</span>
+            <span class="folder-actions">
+              <button type="button" data-rename-folder="${fo.id}" data-folder-key="${key}" data-folder-category="${category}" title="Rename folder">\u270e</button>
+              <button type="button" data-delete-folder="${fo.id}" data-folder-key="${key}" data-folder-category="${category}" title="Delete folder (files stay, moved to No folder)">\u2715</button>
+            </span>
           </div>
-        </div>`).join('');
-    } else {
-      listEl.innerHTML = files.map((f) => {
-        const isImage = (f.mime_type || '').startsWith('image/');
-        const thumb = isImage
-          ? `<img src="/api/sites/${state.siteId}/files/${f.id}" alt="${escapeHtml(f.filename)}" class="inline-thumb" loading="lazy"
-                  data-lightbox-src="/api/sites/${state.siteId}/files/${f.id}" />`
-          : '';
-        return `
-        <div class="discussion-msg" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
-          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-            ${thumb}
-            <div style="min-width:0;">
-              <a href="/api/sites/${state.siteId}/files/${f.id}" target="_blank" rel="noopener noreferrer">${escapeHtml(f.filename)}</a>
-              <div class="meta">${(f.file_size / 1024).toFixed(0)} KB \u2014 uploaded ${new Date(f.uploaded_at).toLocaleString()}</div>
-            </div>
-          </div>
-          <button type="button" class="btn-remove-row" data-delete-file="${f.id}" data-file-key="${key}" data-file-category="${category}" title="Delete">\u2715</button>
+          <div class="file-folder-body" ${collapsed ? 'hidden' : ''}>${itemsHtml}</div>
         </div>`;
-      }).join('');
-    }
+    }).join('');
+
+    const unfiledLabel = folders.length ? '<div class="subcategory-heading" style="margin-top:16px;">No folder</div>' : '';
+    const unfiledHtml = unfiled.length
+      ? (imageGrid ? `<div class="image-grid">${unfiled.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join('')}</div>`
+                   : unfiled.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join(''))
+      : (folders.length ? '<p class="note">Nothing here.</p>' : '<p class="note">No files uploaded yet.</p>');
+
+    listEl.innerHTML = `${toolbarHtml}${folderSectionsHtml}${unfiledLabel}${unfiledHtml}`;
+
+    wireFolderToolbar(listEl, key, category, imageGrid);
+
+    listEl.querySelectorAll('[data-toggle-folder]').forEach((header) => {
+      header.addEventListener('click', () => {
+        const id = header.dataset.toggleFolder;
+        if (collapsedFolders.has(id)) collapsedFolders.delete(id); else collapsedFolders.add(id);
+        loadFileList(key, category, imageGrid);
+      });
+    });
+    listEl.querySelectorAll('[data-rename-folder]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const current = folders.find((fo) => fo.id === btn.dataset.renameFolder);
+        const name = prompt('Rename folder:', current ? current.name : '');
+        if (!name || !name.trim()) return;
+        await api(`/api/sites/${state.siteId}/folders/${btn.dataset.renameFolder}`, { method: 'PUT', body: JSON.stringify({ name: name.trim() }) });
+        await loadFileList(btn.dataset.folderKey, btn.dataset.folderCategory, imageGrid);
+      });
+    });
+    listEl.querySelectorAll('[data-delete-folder]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this folder? Its files are kept and moved back to "No folder".')) return;
+        await api(`/api/sites/${state.siteId}/folders/${btn.dataset.deleteFolder}`, { method: 'DELETE' });
+        await loadFileList(btn.dataset.folderKey, btn.dataset.folderCategory, imageGrid);
+      });
+    });
     listEl.querySelectorAll('[data-delete-file]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         if (!confirm('Delete this file?')) return;
@@ -1079,9 +1166,30 @@ async function loadFileList(key, category, imageGrid) {
         await loadFileList(btn.dataset.fileKey, btn.dataset.fileCategory, imageGrid);
       });
     });
+    listEl.querySelectorAll('[data-move-file]').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        await api(`/api/sites/${state.siteId}/files/${sel.dataset.moveFile}/move`, { method: 'PUT', body: JSON.stringify({ folder_id: sel.value || null }) });
+        await loadFileList(sel.dataset.fileKey, sel.dataset.fileCategory, imageGrid);
+      });
+    });
   } catch (err) {
     listEl.innerHTML = `<p class="note">Could not load files: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+function wireFolderToolbar(listEl, key, category, imageGrid) {
+  const btn = listEl.querySelector('[data-new-folder]');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const name = prompt('Name this folder:');
+    if (!name || !name.trim()) return;
+    try {
+      await api(`/api/sites/${state.siteId}/folders`, { method: 'POST', body: JSON.stringify({ name: name.trim(), category }) });
+      await loadFileList(key, category, imageGrid);
+    } catch (err) {
+      alert(`Could not create folder: ${err.message}`);
+    }
+  });
 }
 
 // ---------- Reusable "Website Links" section (used by Tender Spec & Supporting Info) ----------

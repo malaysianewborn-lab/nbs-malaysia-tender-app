@@ -83,6 +83,17 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: 'Not authenticated' });
 }
 
+// Express 4 does NOT automatically catch a rejected promise thrown inside an
+// async route handler — an unhandled rejection there crashes the ENTIRE
+// Node process (every user, every site), not just the one request. Every
+// async route below is wrapped with this so a thrown/rejected error is
+// routed to Express's own error-handling middleware instead of escaping.
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+}
+
 // ---------- Auth ----------
 app.post('/api/login', (req, res) => {
   const { password } = req.body || {};
@@ -103,16 +114,16 @@ app.get('/api/session', (req, res) => {
 });
 
 // ---------- Sites ----------
-app.get('/api/sites', requireAuth, async (req, res) => {
+app.get('/api/sites', requireAuth, asyncHandler(async (req, res) => {
   const { data, error } = await supabase
     .from('sites')
     .select('id, name, created_at, updated_at')
     .order('created_at', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.post('/api/sites', requireAuth, async (req, res) => {
+app.post('/api/sites', requireAuth, asyncHandler(async (req, res) => {
   const { name, data: initialData } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Site name is required' });
   const { data, error } = await supabase
@@ -122,9 +133,9 @@ app.post('/api/sites', requireAuth, async (req, res) => {
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.get('/api/sites/:id', requireAuth, async (req, res) => {
+app.get('/api/sites/:id', requireAuth, asyncHandler(async (req, res) => {
   const { data, error } = await withRetry(() => supabase
     .from('sites')
     .select('*')
@@ -132,9 +143,9 @@ app.get('/api/sites/:id', requireAuth, async (req, res) => {
     .single());
   if (error) return res.status(404).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.put('/api/sites/:id', requireAuth, async (req, res) => {
+app.put('/api/sites/:id', requireAuth, asyncHandler(async (req, res) => {
   const { name, data: newData } = req.body || {};
   const patch = {};
   if (typeof name === 'string' && name.trim()) patch.name = name.trim();
@@ -147,16 +158,16 @@ app.put('/api/sites/:id', requireAuth, async (req, res) => {
     .single());
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.delete('/api/sites/:id', requireAuth, async (req, res) => {
+app.delete('/api/sites/:id', requireAuth, asyncHandler(async (req, res) => {
   const { error } = await supabase.from('sites').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
 
 // ---------- Discussion ----------
-app.get('/api/sites/:id/discussion', requireAuth, async (req, res) => {
+app.get('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res) => {
   const { data, error } = await supabase
     .from('discussion_messages')
     .select('*')
@@ -164,9 +175,9 @@ app.get('/api/sites/:id/discussion', requireAuth, async (req, res) => {
     .order('created_at', { ascending: true });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.post('/api/sites/:id/discussion', requireAuth, async (req, res) => {
+app.post('/api/sites/:id/discussion', requireAuth, asyncHandler(async (req, res) => {
   const { author, message } = req.body || {};
   if (!message || !message.trim()) return res.status(400).json({ error: 'Message is required' });
   const { data, error } = await supabase
@@ -180,9 +191,9 @@ app.post('/api/sites/:id/discussion', requireAuth, async (req, res) => {
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, async (req, res) => {
+app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, asyncHandler(async (req, res) => {
   const { error } = await supabase
     .from('discussion_messages')
     .delete()
@@ -190,7 +201,7 @@ app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, async (req, res)
     .eq('site_id', req.params.siteId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
 
 // ---------- Files: Tender Spec docs, Images, and Supporting Info docs ----------
 // All share one table, distinguished by "category". Stored as base64 in
@@ -200,28 +211,31 @@ app.delete('/api/sites/:siteId/discussion/:msgId', requireAuth, async (req, res)
 const VALID_CATEGORIES = ['tender_spec', 'image', 'supporting_doc', 'supporting_picture', 'supporting_quotation'];
 const IMAGE_ONLY_CATEGORIES = ['image', 'supporting_picture'];
 
-app.get('/api/sites/:siteId/files', requireAuth, async (req, res) => {
+app.get('/api/sites/:siteId/files', requireAuth, asyncHandler(async (req, res) => {
   const category = req.query.category;
   let query = supabase
     .from('supporting_files')
-    .select('id, filename, mime_type, file_size, category, uploaded_at')
+    .select('id, filename, mime_type, file_size, category, folder_id, uploaded_at')
     .eq('site_id', req.params.siteId)
     .order('uploaded_at', { ascending: false });
   if (category) query = query.eq('category', category);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), async (req, res) => {
+app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), asyncHandler(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const category = VALID_CATEGORIES.includes(req.body.category) ? req.body.category : 'supporting_doc';
   if (IMAGE_ONLY_CATEGORIES.includes(category) && !req.file.mimetype.startsWith('image/')) {
     return res.status(400).json({ error: 'Only image files are allowed here' });
   }
+  // folder_id is optional — an upload made while a folder is "open" lands directly in it
+  const folderId = req.body.folder_id && req.body.folder_id !== 'null' ? req.body.folder_id : null;
   const { error } = await supabase.from('supporting_files').insert({
     site_id: req.params.siteId,
     category,
+    folder_id: folderId,
     filename: req.file.originalname,
     mime_type: req.file.mimetype,
     file_size: req.file.size,
@@ -229,9 +243,21 @@ app.post('/api/sites/:siteId/files', requireAuth, upload.single('file'), async (
   });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
 
-app.get('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => {
+// Move a file into a folder (or back to "no folder" with folder_id: null)
+app.put('/api/sites/:siteId/files/:fileId/move', requireAuth, asyncHandler(async (req, res) => {
+  const { folder_id: folderId } = req.body || {};
+  const { error } = await supabase
+    .from('supporting_files')
+    .update({ folder_id: folderId || null })
+    .eq('id', req.params.fileId)
+    .eq('site_id', req.params.siteId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+}));
+
+app.get('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req, res) => {
   const { data, error } = await supabase
     .from('supporting_files')
     .select('filename, mime_type, file_data')
@@ -242,9 +268,9 @@ app.get('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => {
   res.set('Content-Type', data.mime_type);
   res.set('Content-Disposition', `inline; filename="${encodeURIComponent(data.filename)}"`);
   res.send(Buffer.from(data.file_data, 'base64'));
-});
+}));
 
-app.delete('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => {
+app.delete('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req, res) => {
   const { error } = await supabase
     .from('supporting_files')
     .delete()
@@ -252,13 +278,68 @@ app.delete('/api/sites/:siteId/files/:fileId', requireAuth, async (req, res) => 
     .eq('site_id', req.params.siteId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
+
+// ---------- Folders (group uploaded files within a category) ----------
+// Folders are scoped per site AND per category, so "Tender Spec Documents"
+// and Supporting Info's "Quotation" section each keep their own folder list.
+app.get('/api/sites/:siteId/folders', requireAuth, asyncHandler(async (req, res) => {
+  const category = req.query.category;
+  let query = supabase
+    .from('file_folders')
+    .select('id, name, category, created_at')
+    .eq('site_id', req.params.siteId)
+    .order('name', { ascending: true });
+  if (category) query = query.eq('category', category);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+}));
+
+app.post('/api/sites/:siteId/folders', requireAuth, asyncHandler(async (req, res) => {
+  const { name, category } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Folder name is required' });
+  if (!VALID_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+  const { data, error } = await supabase
+    .from('file_folders')
+    .insert({ site_id: req.params.siteId, category, name: name.trim() })
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+}));
+
+app.put('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(async (req, res) => {
+  const { name } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Folder name is required' });
+  const { data, error } = await supabase
+    .from('file_folders')
+    .update({ name: name.trim() })
+    .eq('id', req.params.folderId)
+    .eq('site_id', req.params.siteId)
+    .select()
+    .single();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+}));
+
+// Deleting a folder never deletes its files — they fall back to "no folder"
+// (the DB foreign key is ON DELETE SET NULL; see migration_8_folders.sql).
+app.delete('/api/sites/:siteId/folders/:folderId', requireAuth, asyncHandler(async (req, res) => {
+  const { error } = await supabase
+    .from('file_folders')
+    .delete()
+    .eq('id', req.params.folderId)
+    .eq('site_id', req.params.siteId);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+}));
 
 // ---------- Version history ----------
 // Saves a full, named snapshot of a site's data at a point in time. Restoring
 // overwrites the site's current data with that snapshot (the site itself,
 // discussion, and version list are untouched).
-app.get('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
+app.get('/api/sites/:siteId/versions', requireAuth, asyncHandler(async (req, res) => {
   const { data, error } = await supabase
     .from('site_versions')
     .select('id, label, created_at')
@@ -266,9 +347,9 @@ app.get('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
     .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
-});
+}));
 
-app.post('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
+app.post('/api/sites/:siteId/versions', requireAuth, asyncHandler(async (req, res) => {
   const { label } = req.body || {};
   if (!label || !label.trim()) return res.status(400).json({ error: 'A version label is required' });
   const { data: site, error: siteErr } = await supabase
@@ -284,9 +365,9 @@ app.post('/api/sites/:siteId/versions', requireAuth, async (req, res) => {
   });
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
 
-app.post('/api/sites/:siteId/versions/:versionId/restore', requireAuth, async (req, res) => {
+app.post('/api/sites/:siteId/versions/:versionId/restore', requireAuth, asyncHandler(async (req, res) => {
   const { data: version, error: verErr } = await supabase
     .from('site_versions')
     .select('data')
@@ -302,9 +383,9 @@ app.post('/api/sites/:siteId/versions/:versionId/restore', requireAuth, async (r
     .single();
   if (error) return res.status(500).json({ error: error.message });
   res.json(updated);
-});
+}));
 
-app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, async (req, res) => {
+app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, asyncHandler(async (req, res) => {
   const { error } = await supabase
     .from('site_versions')
     .delete()
@@ -312,10 +393,10 @@ app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, async (req, re
     .eq('site_id', req.params.siteId);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
-});
+}));
 
 // ---------- Report export (Excel & PDF) ----------
-app.get('/api/sites/:id/export/excel', requireAuth, async (req, res) => {
+app.get('/api/sites/:id/export/excel', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
   const computed = computeAll(site.data);
@@ -323,16 +404,16 @@ app.get('/api/sites/:id/export/excel', requireAuth, async (req, res) => {
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.xlsx"`);
   res.send(Buffer.from(buffer));
-});
+}));
 
-app.get('/api/sites/:id/export/pdf', requireAuth, async (req, res) => {
+app.get('/api/sites/:id/export/pdf', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
   const computed = computeAll(site.data);
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.pdf"`);
   buildPdfReport(site, computed, res);
-});
+}));
 
 // ---------- Static front-end ----------
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -345,8 +426,24 @@ app.get('*', (req, res) => {
 app.use((err, req, res, next) => {
   // eslint-disable-next-line no-console
   console.error(err);
+  if (res.headersSent) return next(err); // e.g. mid-stream during a PDF export — can't send a fresh JSON body now
   const status = err.status || (err.name === 'MulterError' ? 400 : 500);
   res.status(status).json({ error: err.message || 'Something went wrong' });
+});
+
+// Last-resort safety net: without this, ANY unhandled rejection or thrown
+// error anywhere in the process (not just inside an Express route — a bad
+// timer callback, a stray promise, a dependency's internal error) takes the
+// entire Node process down, which is what caused the PDF-export 502s: the
+// whole app went offline for every user/site until Render restarted it.
+// This keeps the process alive and logs instead of crashing.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('Unhandled promise rejection (recovered, process kept alive):', reason);
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('Uncaught exception (recovered, process kept alive):', err);
 });
 
 app.listen(PORT, () => {
