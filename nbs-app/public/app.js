@@ -139,9 +139,9 @@ const DEFAULT_SITE_DATA = {
   },
   consumables: {
     items: [
-      { name: 'Pipette tips', qty: 10, costPerUnit: 15 },
-      { name: 'Sample collection tubes', qty: 300, costPerUnit: 0.5 },
-      { name: 'Gloves (box)', qty: 5, costPerUnit: 12 },
+      { name: 'Pipette tips', unit: 'box', qty: 10, costPerUnit: 15 },
+      { name: 'Sample collection tubes', unit: 'each', qty: 300, costPerUnit: 0.5 },
+      { name: 'Gloves', unit: 'box', qty: 5, costPerUnit: 12 },
     ],
   },
   freightTax: {
@@ -464,7 +464,7 @@ on('tab-content', 'click', (e) => {
   if (addConsumable) {
     state.site.data.consumables = state.site.data.consumables || { items: [] };
     state.site.data.consumables.items = state.site.data.consumables.items || [];
-    state.site.data.consumables.items.push({ name: '', qty: 0, costPerUnit: 0 });
+    state.site.data.consumables.items.push({ name: '', unit: '', qty: 0, costPerUnit: 0 });
     renderActiveTab();
     scheduleSave();
     return;
@@ -776,10 +776,11 @@ function renderConsumables(container, data) {
     <div class="card">
       <h2>General Lab Consumables <span style="font-weight:normal;font-size:12px;">(enter quantity and unit cost directly, not formula-driven)</span></h2>
       <table class="calc-table">
-        <thead><tr><th>Item</th><th>Quantity</th><th>Cost per unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th></th></tr></thead>
+        <thead><tr><th>Item</th><th>Unit</th><th>Quantity</th><th>Cost per unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th></th></tr></thead>
         <tbody>
           ${items.map((it, i) => `<tr>
             <td class="label-cell"><input type="text" data-path="consumables.items.${i}.name" value="${escapeHtml(it.name)}" style="text-align:left;width:100%;" placeholder="e.g. Pipette tips" /></td>
+            <td><input type="text" data-path="consumables.items.${i}.unit" value="${escapeHtml(it.unit || '')}" style="text-align:center;width:100%;" placeholder="e.g. box, pack, each" /></td>
             <td><input type="number" step="any" data-path="consumables.items.${i}.qty" data-type="number" value="${it.qty}" /></td>
             <td><input type="number" step="any" data-path="consumables.items.${i}.costPerUnit" data-type="number" value="${it.costPerUnit}" /></td>
             <td class="computed" data-out="consumablesCalc.items.${i}.totalCost" data-fmt="cur">\u2014</td>

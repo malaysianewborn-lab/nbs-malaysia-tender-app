@@ -211,13 +211,13 @@ async function buildExcelReport(site, computed) {
   // Consumables sheet
   // ============================================================
   const sCons = wb.addWorksheet('Consumables');
-  sCons.columns = [{ width: 34 }, { width: 14 }, { width: 18 }, { width: 14 }];
-  styleTitle(sCons, 'General Lab Consumables', 4);
+  sCons.columns = [{ width: 34 }, { width: 14 }, { width: 14 }, { width: 18 }, { width: 14 }];
+  styleTitle(sCons, 'General Lab Consumables', 5);
   sCons.addRow([]);
-  const consHead = sCons.addRow(['Item', 'Quantity', `Cost/unit (${currency.symbol})`, curCol]);
+  const consHead = sCons.addRow(['Item', 'Unit', 'Quantity', `Cost/unit (${currency.symbol})`, curCol]);
   styleHeaderRow(consHead);
-  computed.consumablesCalc.items.forEach((it) => sCons.addRow([it.name, it.qty, it.costPerUnit, fmtCur(it.totalCost)]));
-  styleTotalRow(sCons.addRow(['TOTAL', '', '', fmtCur(computed.consumablesCalc.totalCost)]));
+  computed.consumablesCalc.items.forEach((it) => sCons.addRow([it.name, it.unit || '', it.qty, it.costPerUnit, fmtCur(it.totalCost)]));
+  styleTotalRow(sCons.addRow(['TOTAL', '', '', '', fmtCur(computed.consumablesCalc.totalCost)]));
 
   // ============================================================
   // Freight & Tax sheet
