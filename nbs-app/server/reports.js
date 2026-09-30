@@ -326,21 +326,21 @@ async function buildKitExcelReport(site, computed, calcName) {
 
   // Kit & Components sheet
   const sKit = wb.addWorksheet('Kit & Components');
-  sKit.columns = [{ width: 30 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 12 }, { width: 14 }, { width: 14 }];
-  styleTitle(sKit, 'Kit & Components', 11);
+  sKit.columns = [{ width: 30 }, { width: 14 }, { width: 16 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 16 }, { width: 16 }, { width: 12 }, { width: 14 }, { width: 14 }];
+  styleTitle(sKit, 'Kit & Components', 12);
   sKit.addRow([]);
   const kit = site.data.kit || {};
   const ck = kit.completeKits || {};
   const kc = computed.kitCalc;
-  styleSubheading(sKit, sKit.addRow(['Complete Kit(s)', '', '', '', '', '', '', '', '', '', '']));
+  styleSubheading(sKit, sKit.addRow(['Complete Kit(s)', '', '', '', '', '', '', '', '', '', '', '']));
   sKit.addRow(['Complete kits purchased (qty)', ck.qty || 0]);
   sKit.addRow([`Cost per kit (${currency.symbol})`, ck.costPerKit || 0]);
   sKit.addRow(['Assays covered per kit', ck.assaysPerKit || 200]);
-  sKit.addRow(['Complete kit(s) cost', '', '', '', '', '', '', '', '', '', fmtCur(kc.kitCost)]);
+  sKit.addRow(['Complete kit(s) cost', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.kitCost)]);
   sKit.addRow(['Assays covered by kit(s)', fmtNum(kc.assaysCovered)]);
   sKit.addRow([]);
-  styleSubheading(sKit, sKit.addRow(['LC Solvent Sufficiency', '', '', '', '', '', '', '', '', '', '']));
-  const lcHead = sKit.addRow(['Component', 'Vol/sample (mL)', 'Total required (mL)', 'Packs from kit(s)', 'Extra packs bought', 'Pack size (mL)', 'Total available (mL)', 'Surplus/shortfall (mL)', 'Status', `Cost/extra pack (${currency.symbol})`, curCol]);
+  styleSubheading(sKit, sKit.addRow(['LC Solvent Sufficiency', '', '', '', '', '', '', '', '', '', '', '']));
+  const lcHead = sKit.addRow(['Component', 'Vol/sample (mL)', 'Total required (mL)', 'Packs/kit', 'Packs from kit(s)', 'Extra packs bought', 'Pack size (mL)', 'Total available (mL)', 'Surplus/shortfall (mL)', 'Status', `Cost/extra pack (${currency.symbol})`, curCol]);
   styleHeaderRow(lcHead);
   [
     ['Mobile Phase A', kc.mobilePhaseA],
@@ -349,16 +349,16 @@ async function buildKitExcelReport(site, computed, calcName) {
     ['Precipitant P', kc.precipitantP],
   ].forEach(([label, line]) => {
     const r = sKit.addRow([
-      label, line.volPerSampleML, line.totalRequiredML.toFixed(2), line.packsFromKits,
+      label, line.volPerSampleML, line.totalRequiredML.toFixed(2), line.packsPerKit, line.packsFromKits,
       line.extraPacksPurchased, line.packSizeML, line.totalAvailableML.toFixed(2), line.surplusML.toFixed(2),
       line.sufficient ? 'Sufficient' : 'Shortfall', line.extraPacksPurchased ? (line.extraCost / (line.extraPacksPurchased || 1)) : 0, fmtCur(line.extraCost),
     ]);
-    r.getCell(9).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: line.sufficient ? GREEN : RED } };
-    if (line.surplusML < 0) r.getCell(8).font = { bold: true, color: { argb: 'FF9C0006' } };
+    r.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: line.sufficient ? GREEN : RED } };
+    if (line.surplusML < 0) r.getCell(9).font = { bold: true, color: { argb: 'FF9C0006' } };
   });
-  styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', fmtCur(kc.lcExtraCost)]));
+  styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.lcExtraCost)]));
   sKit.addRow([]);
-  styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '']));
+  styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '', '']));
   const itemsHead = sKit.addRow(['Code', 'Item', 'Pack/unit size', 'Quantity', `Cost/unit (${currency.symbol})`, curCol]);
   styleHeaderRow(itemsHead);
   kc.additionalItems.forEach((it) => sKit.addRow([it.code || '', it.name || '', it.unit || '', it.qty, it.costPerUnit, fmtCur(it.totalCost)]));
@@ -531,6 +531,7 @@ function buildKitPdfReport(site, computed, res, calcName) {
     ['Autosampler Washing Solution', kc.washSolution],
     ['Precipitant P', kc.precipitantP],
   ].forEach(([label, line]) => {
+    h.row(`${label}: packs/kit × kits = packs from kit(s)`, `${fmtNum(line.packsPerKit)} × ${fmtNum(kc.kitsQty)} = ${fmtNum(line.packsFromKits)}`);
     h.row(`${label}: required (mL) / available (mL)`, `${line.totalRequiredML.toFixed(1)} / ${line.totalAvailableML.toFixed(1)}`);
     h.row(`${label} status`, line.sufficient ? 'Sufficient' : `Shortfall (${line.surplusML.toFixed(1)} mL)`, { bold: !line.sufficient, color: line.sufficient ? '#14632f' : '#9c0006' });
   });

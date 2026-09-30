@@ -243,17 +243,18 @@ function computeAll(data) {
 const KIT_DEFAULT_ASSAYS_PER_KIT = 200;
 
 // One LC-side consumable's sufficiency check: how much is required (volume
-// per sample x total samples) vs. how much is actually on hand. "Packs from
-// kit(s)" is a free-text field the person fills in themselves (how many
-// packs actually came in the box) rather than something auto-multiplied
-// from complete-kits-purchased x an assumed per-kit count — vendors package
-// kits differently, so guessing that number risked being wrong. "Total
-// available (mL)" IS a genuine derived value (packs on hand x pack size,
-// both of which are entered), so it stays computed.
-function computeKitLcLine(cfg, totalSamples) {
+// per sample x total samples) vs. how much is actually on hand. "Packs/kit"
+// is a free-text field the person fills in themselves (how many packs of
+// this component come bundled in ONE kit) rather than a hardcoded assumption
+// — vendors package kits differently, so guessing that number risked being
+// wrong. "Packs from kit(s)" (the total) IS a genuine derived value (packs
+// per kit x kits purchased), so that stays computed, same as "Total
+// available (mL)" (total packs on hand x pack size).
+function computeKitLcLine(cfg, kitsQty, totalSamples) {
   cfg = cfg || {};
   const packSizeML = num(cfg.packSizeML);
-  const packsFromKits = num(cfg.packsFromKits);
+  const packsPerKit = num(cfg.packsPerKit);
+  const packsFromKits = packsPerKit * num(kitsQty);
   const extraPacksPurchased = num(cfg.extraPacksPurchased);
   const costPerPack = num(cfg.costPerPack);
   const volPerSampleML = num(cfg.volPerSampleML);
@@ -263,7 +264,7 @@ function computeKitLcLine(cfg, totalSamples) {
   const surplusML = totalAvailableML - totalRequiredML;
   const extraCost = extraPacksPurchased * costPerPack;
   return {
-    packSizeML, volPerSampleML, packsFromKits, extraPacksPurchased, totalPacks,
+    packSizeML, volPerSampleML, packsPerKit, packsFromKits, extraPacksPurchased, totalPacks,
     totalAvailableML, totalRequiredML, surplusML, sufficient: surplusML >= 0, extraCost,
   };
 }
@@ -284,10 +285,10 @@ function computeKit(kit, totalSamples, gradientCalc) {
   const assaysCovered = kitsQty * assaysPerKit;
 
   const lc = kit.lcConsumables || {};
-  const mobilePhaseA = computeKitLcLine({ ...(lc.mobilePhaseA || {}), volPerSampleML: gradientCalc.volA }, totalSamples);
-  const mobilePhaseB = computeKitLcLine({ ...(lc.mobilePhaseB || {}), volPerSampleML: gradientCalc.volB }, totalSamples);
-  const washSolution = computeKitLcLine(lc.washSolution, totalSamples);
-  const precipitantP = computeKitLcLine(lc.precipitantP, totalSamples);
+  const mobilePhaseA = computeKitLcLine({ ...(lc.mobilePhaseA || {}), volPerSampleML: gradientCalc.volA }, kitsQty, totalSamples);
+  const mobilePhaseB = computeKitLcLine({ ...(lc.mobilePhaseB || {}), volPerSampleML: gradientCalc.volB }, kitsQty, totalSamples);
+  const washSolution = computeKitLcLine(lc.washSolution, kitsQty, totalSamples);
+  const precipitantP = computeKitLcLine(lc.precipitantP, kitsQty, totalSamples);
   const lcExtraCost = mobilePhaseA.extraCost + mobilePhaseB.extraCost + washSolution.extraCost + precipitantP.extraCost;
   const lcAllSufficient = mobilePhaseA.sufficient && mobilePhaseB.sufficient && washSolution.sufficient && precipitantP.sufficient;
 
