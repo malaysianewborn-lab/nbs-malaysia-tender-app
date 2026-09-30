@@ -223,6 +223,8 @@ table.calc-table .warn { background: #ffc7ce; color: #9c0006; font-weight: bold;
   border-radius: 4px; width: 24px; height: 24px; cursor: pointer; font-size: 12px; line-height: 1;
 }
 .btn-remove-row:hover { background: var(--danger); color: white; }
+.btn-remove-row:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-remove-row:disabled:hover { background: transparent; color: var(--danger); }
 
 /* ---------- Calculator sub-tabs ---------- */
 .subtabs {

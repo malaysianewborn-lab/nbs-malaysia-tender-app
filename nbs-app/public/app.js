@@ -661,6 +661,30 @@ on('tab-content', 'click', (e) => {
     scheduleSave();
     return;
   }
+  const addGradientRow = e.target.closest('#add-gradient-row-btn');
+  if (addGradientRow) {
+    state.site.data.lcGradient = state.site.data.lcGradient || [];
+    const rows = state.site.data.lcGradient;
+    const last = rows[rows.length - 1];
+    // New row starts as a duplicate of the last timepoint, one minute later — closest to what
+    // you'd type next, and never leaves a stray 0/0/0/0 row that would zero out the gradient.
+    rows.push(last
+      ? { no: rows.length + 1, time: Number((last.time + 1).toFixed(2)), flow: last.flow, a: last.a, b: last.b, shape: 'Linear' }
+      : { no: 1, time: 0, flow: 0.6, a: 90, b: 10, shape: 'Initial' });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeGradientRow = e.target.closest('[data-remove-gradient-row]');
+  if (removeGradientRow) {
+    const rows = state.site.data.lcGradient || [];
+    if (rows.length <= 2) return; // keep at least a start and end point
+    const i = parseInt(removeGradientRow.dataset.removeGradientRow, 10);
+    rows.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
   const addKitItem = e.target.closest('#add-kit-item-btn');
   if (addKitItem) {
     state.site.data.kit = state.site.data.kit || {};
@@ -753,18 +777,21 @@ function renderGradient(container, data) {
     <div class="card">
       <h2>LC Gradient Method</h2>
       <table class="calc-table">
-        <thead><tr><th>No</th><th>Time (min)</th><th>Flow (mL/min)</th><th>%A</th><th>%B</th><th>Shape</th></tr></thead>
+        <thead><tr><th>No</th><th>Time (min)</th><th>Flow (mL/min)</th><th>%A</th><th>%B</th><th>Shape</th><th></th></tr></thead>
         <tbody>
           ${rows.map((r, i) => `<tr>
-            <td>${r.no}</td>
+            <td>${i + 1}</td>
             <td><input type="number" step="any" data-path="lcGradient.${i}.time" data-type="number" value="${r.time}" /></td>
             <td><input type="number" step="any" data-path="lcGradient.${i}.flow" data-type="number" value="${r.flow}" /></td>
             <td><input type="number" step="any" data-path="lcGradient.${i}.a" data-type="number" value="${r.a}" /></td>
             <td><input type="number" step="any" data-path="lcGradient.${i}.b" data-type="number" value="${r.b}" /></td>
             <td><input type="text" data-path="lcGradient.${i}.shape" value="${escapeHtml(r.shape)}" /></td>
+            <td><button type="button" class="btn-remove-row" data-remove-gradient-row="${i}" title="Remove" ${rows.length <= 2 ? 'disabled' : ''}>✕</button></td>
           </tr>`).join('')}
         </tbody>
       </table>
+      <button type="button" id="add-gradient-row-btn" class="btn-add-row">+ Add timepoint</button>
+      <p class="note">A gradient needs at least 2 timepoints (start and end) to compute a volume.</p>
     </div>
     <div class="card">
       <h2>Segment-by-Segment Volume (trapezoidal integration)</h2>
