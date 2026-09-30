@@ -373,8 +373,28 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- Report export ----------
+// Lets the person export either calculator's report, regardless of which
+// one is currently active — each calc's name/type is read fresh every time
+// the panel opens so renamed calculators show up correctly.
+function renderExportPanel() {
+  const panel = document.getElementById('export-panel');
+  if (!panel || !state.site) return;
+  const data = state.site.data;
+  const ids = ['calc1', 'calc2'];
+  panel.innerHTML = ids.map((id) => {
+    const calcName = (data.calculators && data.calculators[id] && data.calculators[id].name) || (id === 'calc1' ? 'Calculator 1' : 'Calculator 2');
+    const typeLabel = calculatorType(data, id) === 'kit' ? 'Kit-based' : 'SOP-based';
+    return `
+      <div class="export-group">
+        <div class="export-group-label">${escapeHtml(calcName)} <span class="calc-switch-type">${typeLabel}</span></div>
+        <button type="button" class="export-option" data-export="excel" data-export-calc="${id}">Download as Excel (.xlsx)</button>
+        <button type="button" class="export-option" data-export="pdf" data-export-calc="${id}">Download as PDF</button>
+      </div>`;
+  }).join('');
+}
 on('export-btn', 'click', () => {
   const panel = document.getElementById('export-panel');
+  if (panel.hidden) renderExportPanel();
   panel.hidden = !panel.hidden;
 });
 document.addEventListener('click', (e) => {
@@ -383,24 +403,12 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#export-panel') || e.target.closest('#export-btn')) return;
   panel.hidden = true;
 });
-// Excel/PDF export only supports the original SOP-based calculator so far.
-function warnIfKitExportUnsupported() {
-  if (state.site && activeCalculatorType(state.site.data) === 'kit') {
-    alert('Excel/PDF export isn’t available yet for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export a report.');
-    return true;
-  }
-  return false;
-}
-on('export-excel-btn', 'click', () => {
-  if (!state.siteId) return;
-  if (warnIfKitExportUnsupported()) return;
-  window.location.href = `/api/sites/${state.siteId}/export/excel`;
-  document.getElementById('export-panel').hidden = true;
-});
-on('export-pdf-btn', 'click', () => {
-  if (!state.siteId) return;
-  if (warnIfKitExportUnsupported()) return;
-  window.location.href = `/api/sites/${state.siteId}/export/pdf`;
+on('export-panel', 'click', (e) => {
+  const btn = e.target.closest('[data-export]');
+  if (!btn || !state.siteId) return;
+  const kind = btn.dataset.export; // 'excel' | 'pdf'
+  const calcId = btn.dataset.exportCalc; // 'calc1' | 'calc2'
+  window.location.href = `/api/sites/${state.siteId}/export/${kind}?calculator=${calcId}`;
   document.getElementById('export-panel').hidden = true;
 });
 

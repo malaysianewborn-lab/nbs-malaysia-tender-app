@@ -9,8 +9,8 @@ const cors = require('cors');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
-const { computeAll } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
-const { buildExcelReport, buildPdfReport } = require('./reports.js');
+const { computeAll, computeKitAll } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
+const { buildExcelReport, buildPdfReport, buildKitExcelReport, buildKitPdfReport } = require('./reports.js');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB cap
 
@@ -399,39 +399,71 @@ app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, asyncHandler(a
   res.json({ ok: true });
 }));
 
-// Excel/PDF report generation only understands the original chemistry/SOP-
-// based calculator's data shape. A site whose active calculator is the
-// kit-based one (Calculator 2) is reported clearly rather than silently
-// producing a wrong or empty report.
-function activeCalcType(data) {
-  const id = (data && data.activeCalculatorId) || 'calc1';
-  return (data && data.calculators && data.calculators[id] && data.calculators[id].type) || 'chemistry';
+// A site can hold up to two calculators (calc1/calc2), each with its own
+// type ("chemistry" = SOP/gradient-based, "kit" = commercial-kit-based).
+// Only the currently-ACTIVE calculator's fields live at the root of
+// site.data; the other one's fields (if it has ever been used) are parked
+// under data.calculators[id].data. This mirrors public/app.js's
+// switchCalculator() exactly, so export always matches what the app shows
+// for that calculator regardless of which one happens to be active right now.
+const CALCULATOR_FIELD_KEYS_BY_TYPE = {
+  chemistry: ['batchSetup', 'lcGradient', 'calibratorPrep', 'reagents', 'column', 'solvents', 'consumables', 'freightTax'],
+  kit: ['batchSetup', 'kit', 'consumables', 'freightTax'],
+};
+function calculatorTypeOf(data, id) {
+  return (data.calculators && data.calculators[id] && data.calculators[id].type) || (id === 'calc2' ? 'kit' : 'chemistry');
+}
+function calculatorNameOf(data, id) {
+  return (data.calculators && data.calculators[id] && data.calculators[id].name) || (id === 'calc1' ? 'Calculator 1' : 'Calculator 2');
+}
+// Builds a data-shaped object with the requested calculator's fields at the
+// root (plus site-wide fields report builders need), whether or not that
+// calculator is the one currently active.
+function calculatorSnapshot(data, calcId) {
+  data = data || {};
+  const type = calculatorTypeOf(data, calcId);
+  const activeId = data.activeCalculatorId || 'calc1';
+  const source = calcId === activeId ? data : ((data.calculators && data.calculators[calcId] && data.calculators[calcId].data) || {});
+  const out = {};
+  CALCULATOR_FIELD_KEYS_BY_TYPE[type].forEach((k) => { out[k] = source[k]; });
+  out.currency = data.currency;
+  out.tenderSpec = data.tenderSpec;
+  out.supportingInfo = data.supportingInfo;
+  return { type, name: calculatorNameOf(data, calcId), data: out };
 }
 
 // ---------- Report export (Excel & PDF) ----------
+// ?calculator=calc1|calc2 selects which calculator to export; defaults to
+// whichever one is currently active on the site.
 app.get('/api/sites/:id/export/excel', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
-  if (activeCalcType(site.data) === 'kit') {
-    return res.status(400).json({ error: 'Excel export is not yet available for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export, or ask for kit-report support to be added.' });
-  }
-  const computed = computeAll(site.data);
-  const buffer = await buildExcelReport(site, computed);
+  const calcId = req.query.calculator === 'calc1' || req.query.calculator === 'calc2'
+    ? req.query.calculator : (site.data.activeCalculatorId || 'calc1');
+  const snap = calculatorSnapshot(site.data, calcId);
+  const siteForReport = { ...site, data: snap.data };
+  const buffer = snap.type === 'kit'
+    ? await buildKitExcelReport(siteForReport, computeKitAll(snap.data), snap.name)
+    : await buildExcelReport(siteForReport, computeAll(snap.data), snap.name);
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.xlsx"`);
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-${encodeURIComponent(snap.name)}-tender-report.xlsx"`);
   res.send(Buffer.from(buffer));
 }));
 
 app.get('/api/sites/:id/export/pdf', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
-  if (activeCalcType(site.data) === 'kit') {
-    return res.status(400).json({ error: 'PDF export is not yet available for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export, or ask for kit-report support to be added.' });
-  }
-  const computed = computeAll(site.data);
+  const calcId = req.query.calculator === 'calc1' || req.query.calculator === 'calc2'
+    ? req.query.calculator : (site.data.activeCalculatorId || 'calc1');
+  const snap = calculatorSnapshot(site.data, calcId);
+  const siteForReport = { ...site, data: snap.data };
   res.set('Content-Type', 'application/pdf');
-  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.pdf"`);
-  buildPdfReport(site, computed, res);
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-${encodeURIComponent(snap.name)}-tender-report.pdf"`);
+  if (snap.type === 'kit') {
+    buildKitPdfReport(siteForReport, computeKitAll(snap.data), res, snap.name);
+  } else {
+    buildPdfReport(siteForReport, computeAll(snap.data), res, snap.name);
+  }
 }));
 
 // ---------- Static front-end ----------

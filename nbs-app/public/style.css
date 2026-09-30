@@ -78,7 +78,13 @@ body {
 
 .version-controls-wrap { position: relative; display: inline-flex; gap: 8px; }
 .export-controls-wrap { position: relative; display: inline-flex; }
-.export-panel { width: 220px; padding: 8px; }
+.export-panel { width: 250px; padding: 8px; }
+.export-group { padding: 4px 0 8px; }
+.export-group + .export-group { border-top: 1px solid var(--border-color, #e2e2e2); margin-top: 4px; }
+.export-group-label {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 4px 12px; font-size: 11.5px; font-weight: 600; color: #556;
+}
 .export-option {
   display: block; width: 100%; text-align: left; padding: 9px 12px; border: none;
   background: transparent; color: #1a1a1a; font-size: 12.5px; border-radius: 5px; cursor: pointer;
