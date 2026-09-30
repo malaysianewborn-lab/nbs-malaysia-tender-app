@@ -295,19 +295,53 @@ function computeKitReagentLine(cfg, kitsQty, requiredUses) {
   };
 }
 
-// Calibrators are tracked as separate levels (L0, L1, L2, ...) since each
-// level is typically its own distinct vial with its own pack size/cost, and
-// a shortfall in just one level should be visible rather than averaged
-// away. Controls/QCs, by contrast, are usually sold as ONE bundled set
-// covering every QC level (e.g. a "ClinChek Plasma Control, Level I & II"
-// pack), so they're tracked as a single line (controlSet) rather than
-// per-level — the required volume still accounts for every QC level's
-// injections (qcLevels x qcReps x batches, i.e. batchCalc.totalQCAllBatches).
-// Calibrator level count is driven by Batch Setup's own calLevels field —
-// the single source of truth for "how many calibrator levels" — rather than
-// a second, separate count baked into the kit reagents table, so the two
-// can never disagree. Levels are zero-indexed (L0, L1, ...) to match common
-// vendor numbering (e.g. a 6-level set named L0-L5).
+// The Control Set is purchased as ONE bundle (packs/kit, extra packs, pack
+// size, cost — all shared) but its REQUIREMENT is checked per QC level,
+// since different levels can need different spike volumes and a shortfall
+// in one level should be visible on its own. "Pack size" here means the
+// usable volume PER LEVEL yielded by one bundle (vendor sets are packaged
+// symmetrically across levels — e.g. "2 x 5 x 1 ml" = 5 ml per level from
+// one box), so every level checks its own requirement against the SAME
+// available-volume figure computed from the one shared purchase. The extra
+// cost is counted once (it's one purchase), not once per level.
+function computeControlSet(cfg, kitsQty, qcLevelKeys, qcUsesPerLevel) {
+  cfg = cfg || {};
+  const packSizeUL = num(cfg.packSizeUL);
+  const packsPerKit = num(cfg.packsPerKit);
+  const packsFromKits = packsPerKit * num(kitsQty);
+  const extraPacksPurchased = num(cfg.extraPacksPurchased);
+  const costPerPack = num(cfg.costPerPack);
+  const totalPacks = packsFromKits + extraPacksPurchased;
+  const totalAvailableUL = totalPacks * packSizeUL;
+  const extraCost = extraPacksPurchased * costPerPack;
+  const levelsCfg = cfg.levels || {};
+  const levels = {};
+  qcLevelKeys.forEach((key) => {
+    const volPerUseUL = num((levelsCfg[key] || {}).volPerUseUL);
+    const totalRequiredUL = volPerUseUL * num(qcUsesPerLevel);
+    const surplusUL = totalAvailableUL - totalRequiredUL;
+    levels[key] = {
+      volPerUseUL, totalRequiredUL, totalAvailableUL, surplusUL,
+      sufficient: surplusUL >= 0, requiredUses: num(qcUsesPerLevel),
+    };
+  });
+  const sufficient = qcLevelKeys.every((key) => levels[key].sufficient);
+  return {
+    packSizeUL, packsPerKit, packsFromKits, extraPacksPurchased, totalPacks,
+    totalAvailableUL, costPerPack, extraCost, levels, sufficient,
+  };
+}
+
+// Calibrators are tracked as separate levels (L0, L1, L2, ...), each with
+// its own pack size/cost, since each level is typically its own distinct
+// vial. Controls/QCs are purchased as ONE bundled set (see computeControlSet
+// above) but still checked per QC level, since different levels can need
+// different spike volumes. Level counts are driven by Batch Setup's own
+// calLevels/qcLevels fields — the single source of truth for "how many
+// levels" — rather than a second, separate count baked into the kit
+// reagents table, so the two can never disagree. Levels are zero-indexed
+// (L0, L1, ...) to match common vendor numbering (e.g. a 6-level set named
+// L0-L5).
 function kitLevelKeys(count) {
   const n = Math.max(0, Math.floor(num(count)));
   const keys = [];
@@ -325,9 +359,10 @@ function computeKit(kit, batchCalc, gradientCalc) {
   batchCalc = batchCalc || {};
   gradientCalc = gradientCalc || { volA: 0, volB: 0 };
   const totalSamples = num(batchCalc.totalSamplesRunAllBatches);
-  const totalQC = num(batchCalc.totalQCAllBatches);
   const calUsesPerLevel = num(batchCalc.calReps) * num(batchCalc.batches, 1);
+  const qcUsesPerLevel = num(batchCalc.qcReps) * num(batchCalc.batches, 1);
   const calLevelKeys = kitLevelKeys(batchCalc.calLevels);
+  const qcLevelKeys = kitLevelKeys(batchCalc.qcLevels);
   const completeKits = kit.completeKits || {};
   const kitsQty = num(completeKits.qty);
   const costPerKit = num(completeKits.costPerKit);
@@ -349,7 +384,7 @@ function computeKit(kit, batchCalc, gradientCalc) {
   calLevelKeys.forEach((key) => {
     calibrators[key] = computeKitReagentLine((rg.calibrators || {})[key], kitsQty, calUsesPerLevel);
   });
-  const controlSet = computeKitReagentLine(rg.controlSet, kitsQty, totalQC);
+  const controlSet = computeControlSet(rg.controlSet, kitsQty, qcLevelKeys, qcUsesPerLevel);
   const calibratorsExtraCost = calLevelKeys.reduce((sum, key) => sum + calibrators[key].extraCost, 0);
   const reagentsExtraCost = is.extraCost + calibratorsExtraCost + controlSet.extraCost;
   const reagentsAllSufficient = is.sufficient
@@ -366,7 +401,7 @@ function computeKit(kit, batchCalc, gradientCalc) {
   return {
     kitsQty, costPerKit, assaysPerKit, kitCost, assaysCovered,
     mobilePhaseA, mobilePhaseB, washSolution, precipitantP, lcExtraCost, lcAllSufficient,
-    is, calibrators, controlSet, calLevelKeys,
+    is, calibrators, controlSet, calLevelKeys, qcLevelKeys,
     calibratorsExtraCost, reagentsExtraCost, reagentsAllSufficient,
     additionalItems, additionalItemsTotal, totalCost,
   };

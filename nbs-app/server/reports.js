@@ -381,8 +381,27 @@ async function buildKitExcelReport(site, computed, calcName) {
   const calKeys = Object.keys(kc.calibrators);
   styleSubheading(sKit, sKit.addRow([`Calibrators (${calKeys.length} level${calKeys.length === 1 ? '' : 's'})`, '', '', '', '', '', '', '', '', '', '', '']));
   calKeys.forEach((key, i) => addReagentLineRow(`Calibrator L${i}`, kc.calibrators[key]));
-  styleSubheading(sKit, sKit.addRow(['Controls / QC (one bundled set, all levels)', '', '', '', '', '', '', '', '', '', '', '']));
-  addReagentLineRow('Control Set (all QC levels)', kc.controlSet);
+  // The Control Set is ONE shared purchase (packs/kit, extra packs, pack
+  // size, cost) — one row — but each QC level's own required volume is
+  // checked against it separately, so that's its own row per level with
+  // the purchase columns left blank (n/a — set once on the shared row).
+  const qcKeys = Object.keys(kc.controlSet.levels);
+  styleSubheading(sKit, sKit.addRow([`Controls / QC (${qcKeys.length} level${qcKeys.length === 1 ? '' : 's'} — one bundled purchase)`, '', '', '', '', '', '', '', '', '', '', '']));
+  sKit.addRow([
+    'Control Set (shared purchase)', '', '', kc.controlSet.packsPerKit, kc.controlSet.packsFromKits,
+    kc.controlSet.extraPacksPurchased, kc.controlSet.packSizeUL, kc.controlSet.totalAvailableUL.toFixed(2), '',
+    '', kc.controlSet.extraPacksPurchased ? (kc.controlSet.extraCost / (kc.controlSet.extraPacksPurchased || 1)) : 0, fmtCur(kc.controlSet.extraCost),
+  ]);
+  qcKeys.forEach((key, i) => {
+    const line = kc.controlSet.levels[key];
+    const r = sKit.addRow([
+      `Control ${i + 1}`, line.volPerUseUL, line.totalRequiredUL.toFixed(2), '', '',
+      '', '', line.totalAvailableUL.toFixed(2), line.surplusUL.toFixed(2),
+      line.sufficient ? 'Sufficient' : 'Shortfall', '', '',
+    ]);
+    r.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: line.sufficient ? GREEN : RED } };
+    if (line.surplusUL < 0) r.getCell(9).font = { bold: true, color: { argb: 'FF9C0006' } };
+  });
   styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.reagentsExtraCost)]));
   sKit.addRow([]);
   styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '', '']));
@@ -574,7 +593,18 @@ function buildKitPdfReport(site, computed, res, calcName) {
   };
   addReagentLinePdf('Internal Standard (IS)', kc.is);
   Object.keys(kc.calibrators).forEach((key, i) => addReagentLinePdf(`Calibrator L${i}`, kc.calibrators[key]));
-  addReagentLinePdf('Control Set (all QC levels, one bundled pack)', kc.controlSet);
+  // Control Set: one shared purchase, but required/available/status is
+  // checked per QC level against that one purchase.
+  h.ensureSpace(60);
+  h.row('Control Set: packs/kit × kits = packs from kit(s)', `${fmtNum(kc.controlSet.packsPerKit)} × ${fmtNum(kc.kitsQty)} = ${fmtNum(kc.controlSet.packsFromKits)}`);
+  h.row('Control Set: extra packs bought × pack size (µL)', `${fmtNum(kc.controlSet.extraPacksPurchased)} × ${fmtNum(kc.controlSet.packSizeUL)}`);
+  h.row('Control Set: total available per level (µL)', kc.controlSet.totalAvailableUL.toFixed(1));
+  Object.keys(kc.controlSet.levels).forEach((key, i) => {
+    const line = kc.controlSet.levels[key];
+    h.ensureSpace(40);
+    h.row(`Control ${i + 1}: required (µL) / available (µL)`, `${line.totalRequiredUL.toFixed(1)} / ${line.totalAvailableUL.toFixed(1)}`);
+    h.row(`Control ${i + 1} status`, line.sufficient ? 'Sufficient' : `Shortfall (${line.surplusUL.toFixed(1)} µL)`, { bold: !line.sufficient, color: line.sufficient ? '#14632f' : '#9c0006' });
+  });
   h.ensureSpace(30);
   h.row('Extra IS, Cal & Control cost', fmtCur(kc.reagentsExtraCost));
 
