@@ -266,20 +266,29 @@ app.put('/api/sites/:siteId/files/:fileId/move', requireAuth, asyncHandler(async
 // is never swallowed by it as a file id. Duplicate filenames (two files with
 // the same name, in different folders or re-uploaded) are numbered so
 // nothing silently overwrites another entry inside the zip.
+//
+// Files are fetched ONE AT A TIME (id/filename list first, then a separate
+// small query per file for its base64 file_data) rather than in one big
+// SELECT — file_data can be up to 20 MB each, and pulling several of those
+// in a single statement is exactly what was tripping Postgres's statement
+// timeout. Many small, fast queries avoid that regardless of how many/how
+// large the documents in a folder are, and let the zip start streaming to
+// the browser before every file has even been fetched.
 app.get('/api/sites/:siteId/files/download-zip', requireAuth, asyncHandler(async (req, res) => {
   const category = req.query.category;
   if (!VALID_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
-  let query = supabase
+  let listQuery = supabase
     .from('supporting_files')
-    .select('filename, mime_type, file_data, folder_id')
+    .select('id, filename')
     .eq('site_id', req.params.siteId)
-    .eq('category', category);
+    .eq('category', category)
+    .order('uploaded_at', { ascending: true });
   const { folderId } = req.query;
-  if (folderId === 'unfiled') query = query.is('folder_id', null);
-  else if (folderId) query = query.eq('folder_id', folderId);
-  const { data: files, error } = await withRetry(() => query);
-  if (error) return res.status(500).json({ error: error.message });
-  if (!files || !files.length) return res.status(404).json({ error: 'No files to download' });
+  if (folderId === 'unfiled') listQuery = listQuery.is('folder_id', null);
+  else if (folderId) listQuery = listQuery.eq('folder_id', folderId);
+  const { data: fileList, error: listError } = await withRetry(() => listQuery);
+  if (listError) return res.status(500).json({ error: listError.message });
+  if (!fileList || !fileList.length) return res.status(404).json({ error: 'No files to download' });
 
   let zipLabel = category.replace(/_/g, '-');
   if (folderId && folderId !== 'unfiled') {
@@ -293,7 +302,21 @@ app.get('/api/sites/:siteId/files/download-zip', requireAuth, asyncHandler(async
   archive.on('error', (err) => { if (!res.headersSent) res.status(500); res.end(); console.error('zip error:', err); });
   archive.pipe(res);
   const usedNames = new Map();
-  files.forEach((f) => {
+  for (const f of fileList) {
+    let fileData;
+    try {
+      const { data, error } = await withRetry(() => supabase
+        .from('supporting_files')
+        .select('file_data')
+        .eq('id', f.id)
+        .eq('site_id', req.params.siteId)
+        .single());
+      if (error || !data) throw error || new Error('not found');
+      fileData = data.file_data;
+    } catch (err) {
+      console.error(`download-zip: skipping file ${f.id} (${f.filename}) after fetch error:`, err && err.message);
+      continue; // one bad/slow row shouldn't sink the whole download
+    }
     let name = f.filename || 'file';
     const count = usedNames.get(name) || 0;
     usedNames.set(name, count + 1);
@@ -301,8 +324,8 @@ app.get('/api/sites/:siteId/files/download-zip', requireAuth, asyncHandler(async
       const dot = name.lastIndexOf('.');
       name = dot > 0 ? `${name.slice(0, dot)} (${count})${name.slice(dot)}` : `${name} (${count})`;
     }
-    archive.append(Buffer.from(f.file_data, 'base64'), { name });
-  });
+    archive.append(Buffer.from(fileData, 'base64'), { name });
+  }
   archive.finalize();
 }));
 
