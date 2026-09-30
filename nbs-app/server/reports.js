@@ -108,6 +108,21 @@ function addFreightTaxSheetXlsx(wb, site, computed, currency) {
   styleTotalRow(sFreight.addRow(['FINAL TOTAL', fmtCur(ft.finalTotal)]));
 }
 
+function addLcGradientSheetXlsx(wb, site, computed, sheetTitle) {
+  const sGrad = wb.addWorksheet('LC Method');
+  sGrad.columns = [{ width: 8 }, { width: 12 }, { width: 14 }, { width: 10 }, { width: 10 }, { width: 12 }];
+  styleTitle(sGrad, sheetTitle || 'LC Gradient Method', 6);
+  sGrad.addRow([]);
+  const gHead = sGrad.addRow(['No', 'Time (min)', 'Flow (mL/min)', '%A', '%B', 'Shape']);
+  styleHeaderRow(gHead);
+  (site.data.lcGradient || []).forEach((r) => sGrad.addRow([r.no, r.time, r.flow, r.a, r.b, r.shape]));
+  sGrad.addRow([]);
+  styleSubheading(sGrad, sGrad.addRow(['Mobile Phase Volume per Sample', '', '', '', '', '']));
+  sGrad.addRow(['Mobile Phase A (Water) volume/sample (mL)', computed.gradientCalc.volA.toFixed(3)]);
+  sGrad.addRow(['Mobile Phase B (ACN) volume/sample (mL)', computed.gradientCalc.volB.toFixed(3)]);
+  sGrad.addRow(['Total mobile phase volume/sample (mL)', computed.gradientCalc.totalVol.toFixed(3)]);
+}
+
 function addNotesSheetXlsx(wb, site) {
   const sNotes = wb.addWorksheet('Tender Spec & Notes');
   sNotes.columns = [{ width: 100 }];
@@ -173,19 +188,7 @@ async function buildExcelReport(site, computed, calcName) {
 
   addBatchSetupSheetXlsx(wb, site, computed);
 
-  // LC Gradient sheet
-  const sGrad = wb.addWorksheet('LC Gradient');
-  sGrad.columns = [{ width: 8 }, { width: 12 }, { width: 14 }, { width: 10 }, { width: 10 }, { width: 12 }];
-  styleTitle(sGrad, 'LC Gradient Method', 6);
-  sGrad.addRow([]);
-  const gHead = sGrad.addRow(['No', 'Time (min)', 'Flow (mL/min)', '%A', '%B', 'Shape']);
-  styleHeaderRow(gHead);
-  (site.data.lcGradient || []).forEach((r) => sGrad.addRow([r.no, r.time, r.flow, r.a, r.b, r.shape]));
-  sGrad.addRow([]);
-  styleSubheading(sGrad, sGrad.addRow(['Mobile Phase Volume per Sample', '', '', '', '', '']));
-  sGrad.addRow(['Mobile Phase A (Water) volume/sample (mL)', computed.gradientCalc.volA.toFixed(3)]);
-  sGrad.addRow(['Mobile Phase B (ACN) volume/sample (mL)', computed.gradientCalc.volB.toFixed(3)]);
-  sGrad.addRow(['Total mobile phase volume/sample (mL)', computed.gradientCalc.totalVol.toFixed(3)]);
+  addLcGradientSheetXlsx(wb, site, computed, 'LC Gradient Method');
 
   // Calibrator & QC Prep sheet
   const sCal = wb.addWorksheet('Calibrator & QC Prep');
@@ -319,6 +322,7 @@ async function buildKitExcelReport(site, computed, calcName) {
   lcRow.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: computed.summary.lcAllSufficient ? GREEN : RED } }; });
 
   addBatchSetupSheetXlsx(wb, site, computed);
+  addLcGradientSheetXlsx(wb, site, computed, 'LC Method');
 
   // Kit & Components sheet
   const sKit = wb.addWorksheet('Kit & Components');
@@ -503,6 +507,13 @@ function buildKitPdfReport(site, computed, res, calcName) {
 
   addHeaderPdf(doc, site, currency, calcName ? ` — ${calcName} (Kit-based)` : ' — Kit-based Calculator');
   addBatchSetupPdf(doc, h, site, computed);
+
+  h.ensureSpace(100);
+  h.sectionTitle('LC Method');
+  h.row('Gradient length', `${(site.data.lcGradient || []).length} timepoints`);
+  h.row('Mobile Phase A (Water) per sample', computed.gradientCalc.volA.toFixed(3) + ' mL');
+  h.row('Mobile Phase B (ACN) per sample', computed.gradientCalc.volB.toFixed(3) + ' mL');
+  h.row('Total mobile phase per sample', computed.gradientCalc.totalVol.toFixed(3) + ' mL');
 
   const kc = computed.kitCalc;
   h.ensureSpace(140);

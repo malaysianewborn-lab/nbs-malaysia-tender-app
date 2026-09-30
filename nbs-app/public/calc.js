@@ -272,8 +272,14 @@ function computeKitLcLine(cfg, packsIncludedPerKit, kitsQty, totalSamples) {
   };
 }
 
-function computeKit(kit, totalSamples) {
+// gradientCalc (from computeGradient(data.lcGradient)) drives Mobile Phase
+// A/B's volume-per-sample automatically, same convention as the SOP-based
+// calculator: Mobile Phase A = Water (%A), Mobile Phase B = ACN (%B).
+// Wash Solution and Precipitant P aren't part of the LC gradient, so their
+// volPerSampleML stays a manual field on the kit itself.
+function computeKit(kit, totalSamples, gradientCalc) {
   kit = kit || {};
+  gradientCalc = gradientCalc || { volA: 0, volB: 0 };
   const completeKits = kit.completeKits || {};
   const kitsQty = num(completeKits.qty);
   const costPerKit = num(completeKits.costPerKit);
@@ -282,8 +288,8 @@ function computeKit(kit, totalSamples) {
   const assaysCovered = kitsQty * assaysPerKit;
 
   const lc = kit.lcConsumables || {};
-  const mobilePhaseA = computeKitLcLine(lc.mobilePhaseA, KIT_INCLUDED_PACKS.mobilePhaseA, kitsQty, totalSamples);
-  const mobilePhaseB = computeKitLcLine(lc.mobilePhaseB, KIT_INCLUDED_PACKS.mobilePhaseB, kitsQty, totalSamples);
+  const mobilePhaseA = computeKitLcLine({ ...(lc.mobilePhaseA || {}), volPerSampleML: gradientCalc.volA }, KIT_INCLUDED_PACKS.mobilePhaseA, kitsQty, totalSamples);
+  const mobilePhaseB = computeKitLcLine({ ...(lc.mobilePhaseB || {}), volPerSampleML: gradientCalc.volB }, KIT_INCLUDED_PACKS.mobilePhaseB, kitsQty, totalSamples);
   const washSolution = computeKitLcLine(lc.washSolution, KIT_INCLUDED_PACKS.washSolution, kitsQty, totalSamples);
   const precipitantP = computeKitLcLine(lc.precipitantP, KIT_INCLUDED_PACKS.precipitantP, kitsQty, totalSamples);
   const lcExtraCost = mobilePhaseA.extraCost + mobilePhaseB.extraCost + washSolution.extraCost + precipitantP.extraCost;
@@ -306,7 +312,8 @@ function computeKit(kit, totalSamples) {
 function computeKitAll(data) {
   data = data || {};
   const batchCalc = computeBatch(data.batchSetup);
-  const kitCalc = computeKit(data.kit, batchCalc.totalSamplesRunAllBatches);
+  const gradientCalc = computeGradient(data.lcGradient || []);
+  const kitCalc = computeKit(data.kit, batchCalc.totalSamplesRunAllBatches, gradientCalc);
   const consumablesCalc = computeConsumables(data.consumables);
 
   const grandTotal = kitCalc.totalCost + consumablesCalc.totalCost;
@@ -322,7 +329,7 @@ function computeKitAll(data) {
   const assaysSurplus = kitCalc.assaysCovered - assaysRequired;
 
   return {
-    batchCalc, kitCalc, consumablesCalc, freightTaxCalc,
+    batchCalc, gradientCalc, kitCalc, consumablesCalc, freightTaxCalc,
     summary: {
       kitTotal: kitCalc.kitCost,
       lcExtraTotal: kitCalc.lcExtraCost,

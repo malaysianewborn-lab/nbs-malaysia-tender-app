@@ -408,7 +408,7 @@ app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, asyncHandler(a
 // for that calculator regardless of which one happens to be active right now.
 const CALCULATOR_FIELD_KEYS_BY_TYPE = {
   chemistry: ['batchSetup', 'lcGradient', 'calibratorPrep', 'reagents', 'column', 'solvents', 'consumables', 'freightTax'],
-  kit: ['batchSetup', 'kit', 'consumables', 'freightTax'],
+  kit: ['batchSetup', 'lcGradient', 'kit', 'consumables', 'freightTax'],
 };
 function calculatorTypeOf(data, id) {
   return (data.calculators && data.calculators[id] && data.calculators[id].type) || (id === 'calc2' ? 'kit' : 'chemistry');

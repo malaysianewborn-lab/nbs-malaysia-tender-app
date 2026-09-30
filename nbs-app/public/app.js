@@ -84,8 +84,22 @@ async function api(path, options = {}) {
 // discussion are site-wide and are NOT part of either calculator.
 const CALCULATOR_FIELD_KEYS_BY_TYPE = {
   chemistry: ['batchSetup', 'lcGradient', 'calibratorPrep', 'reagents', 'column', 'solvents', 'consumables', 'freightTax'],
-  kit: ['batchSetup', 'kit', 'consumables', 'freightTax'],
+  kit: ['batchSetup', 'lcGradient', 'kit', 'consumables', 'freightTax'],
 };
+// Shared starting LC method (gradient table) — both calculator types start
+// from the same generic method; each keeps its own independent copy once edited.
+const DEFAULT_LC_GRADIENT = [
+  { no: 1, time: 0.00, flow: 0.600, a: 90, b: 10, shape: 'Initial' },
+  { no: 2, time: 1.00, flow: 0.600, a: 80, b: 20, shape: 'Linear' },
+  { no: 3, time: 3.00, flow: 0.600, a: 75, b: 25, shape: 'Linear' },
+  { no: 4, time: 5.00, flow: 0.600, a: 65, b: 35, shape: 'Linear' },
+  { no: 5, time: 6.00, flow: 0.600, a: 55, b: 45, shape: 'Linear' },
+  { no: 6, time: 7.00, flow: 0.600, a: 30, b: 70, shape: 'Linear' },
+  { no: 7, time: 7.10, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
+  { no: 8, time: 8.00, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
+  { no: 9, time: 8.01, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
+  { no: 10, time: 10.00, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
+];
 function calculatorType(data, id) {
   return (data.calculators && data.calculators[id] && data.calculators[id].type) || 'chemistry';
 }
@@ -98,13 +112,16 @@ function defaultCalculatorFields(type) {
   if (type === 'kit') {
     return {
       batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 6, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
+      lcGradient: DEFAULT_LC_GRADIENT.map((r) => ({ ...r })),
       // Defaults below are read straight off the ClinMass "Complete Kit for
-      // Amino Acids in Plasma" (MS14000) price/contents sheet.
+      // Amino Acids in Plasma" (MS14000) price/contents sheet. Mobile Phase
+      // A/B's volPerSampleML is NOT stored here — it's computed live from
+      // the LC Method tab's gradient (see computeKit/computeKitLcLine).
       kit: {
         completeKits: { qty: 0, costPerKit: 0, assaysPerKit: 200 },
         lcConsumables: {
-          mobilePhaseA: { code: 'MS14008', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
-          mobilePhaseB: { code: 'MS14009', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          mobilePhaseA: { code: 'MS14008', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0 },
+          mobilePhaseB: { code: 'MS14009', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0 },
           washSolution: { code: 'MS14005', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
           precipitantP: { code: 'MS14021', packSizeML: 20, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
         },
@@ -129,18 +146,7 @@ function defaultCalculatorFields(type) {
   }
   return {
     batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 8, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
-    lcGradient: [
-      { no: 1, time: 0.00, flow: 0.600, a: 90, b: 10, shape: 'Initial' },
-      { no: 2, time: 1.00, flow: 0.600, a: 80, b: 20, shape: 'Linear' },
-      { no: 3, time: 3.00, flow: 0.600, a: 75, b: 25, shape: 'Linear' },
-      { no: 4, time: 5.00, flow: 0.600, a: 65, b: 35, shape: 'Linear' },
-      { no: 5, time: 6.00, flow: 0.600, a: 55, b: 45, shape: 'Linear' },
-      { no: 6, time: 7.00, flow: 0.600, a: 30, b: 70, shape: 'Linear' },
-      { no: 7, time: 7.10, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
-      { no: 8, time: 8.00, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
-      { no: 9, time: 8.01, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
-      { no: 10, time: 10.00, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
-    ],
+    lcGradient: DEFAULT_LC_GRADIENT.map((r) => ({ ...r })),
     calibratorPrep: {
       stockDilution: [
         { level: 'S1 (neat stock)', conc: 500, vol: null, meoh: null },
@@ -246,6 +252,9 @@ function switchCalculator(targetId) {
   const incoming = data.calculators[targetId].data || defaultCalculatorFields(targetType);
   CALCULATOR_FIELD_KEYS_BY_TYPE[targetType].forEach((k) => { data[k] = incoming[k]; });
   if (!data.calculators[targetId].data && savedBatchSetup) data.batchSetup = savedBatchSetup;
+  // Backfill: a calculator parked before the LC Method tab existed won't have
+  // its own lcGradient yet — give it the shared default rather than an empty table.
+  if (!data.lcGradient) data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
   data.activeCalculatorId = targetId;
 }
 
@@ -305,6 +314,9 @@ async function loadSite(id) {
     state.site.data.calculators = { calc1: { name: 'Calculator 1', type: 'chemistry' }, calc2: { name: 'Calculator 2', type: 'kit' } };
     state.site.data.activeCalculatorId = 'calc1';
   }
+  // Backfill: a kit calculator saved before the LC Method tab existed won't
+  // have an lcGradient at the root yet.
+  if (!state.site.data.lcGradient) state.site.data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -517,6 +529,7 @@ const CALC_SECTIONS_CHEMISTRY = [
 ];
 const CALC_SECTIONS_KIT = [
   { key: 'batchSetup', label: 'Batch Setup', render: renderBatchSetup },
+  { key: 'lcGradient', label: 'LC Method', render: renderGradient },
   { key: 'kit', label: 'Kit & Components', render: renderKitSection },
   { key: 'consumables', label: 'Consumables', render: renderConsumables },
   { key: 'summary', label: 'Summary', render: renderKitSummary },
@@ -777,7 +790,7 @@ function renderGradient(container, data) {
         <div>${outRow('Mobile Phase B volume per sample (mL) \u2014 assumed ACN', 'gradientCalc.volB', 'num2')}</div>
       </div>
       ${outRow('Total mobile phase volume per sample (mL)', 'gradientCalc.totalVol', 'num2')}
-      <p class="note">Assumes flow is constant or ramps linearly between timepoints. Mobile Phase A = Water, Mobile Phase B = ACN (standard reversed-phase convention: run starts mostly aqueous, ramps toward organic). These volumes feed directly into the Solvents &amp; Acid tab.</p>
+      <p class="note">Assumes flow is constant or ramps linearly between timepoints. Mobile Phase A = Water, Mobile Phase B = ACN (standard reversed-phase convention: run starts mostly aqueous, ramps toward organic). ${activeCalculatorType(data) === 'kit' ? 'These volumes feed directly into the Kit &amp; Components tab’s Mobile Phase A/B sufficiency check.' : 'These volumes feed directly into the Solvents &amp; Acid tab.'}</p>
     </div>`;
 }
 
@@ -1192,11 +1205,16 @@ function renderFreightTax(container, data) {
 }
 
 // ---------- Kit & Components (Calculator 2 type) ----------
-function kitLcRow(label, fieldKey, unit, s, computedPrefix) {
+// gradientPath, when set, links this row's volume/sample to the LC Method
+// tab's computed gradient (Mobile Phase A/B) instead of a manual input.
+function kitLcRow(label, fieldKey, s, computedPrefix, gradientPath) {
   const cfg = s[fieldKey] || {};
+  const volCell = gradientPath
+    ? `<td class="computed" data-out="${gradientPath}" data-fmt="num2">—</td>`
+    : `<td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.volPerSampleML" data-type="number" value="${cfg.volPerSampleML ?? 0}" /></td>`;
   return `<tr>
-    <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}</div></td>
-    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.volPerSampleML" data-type="number" value="${cfg.volPerSampleML ?? 0}" /></td>
+    <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}${gradientPath ? ' · linked to LC Method' : ''}</div></td>
+    ${volCell}
     <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalRequiredML" data-fmt="num2">—</td>
     <td class="linked" data-out="${computedPrefix}.${fieldKey}.packsFromKits" data-fmt="int">—</td>
     <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
@@ -1236,14 +1254,14 @@ function renderKitSection(container, data) {
           <th>Status</th><th>Cost/extra pack ${curLabel()}</th><th>Extra pack cost ${curLabel()}</th>
         </tr></thead>
         <tbody>
-          ${kitLcRow('Mobile Phase A', 'mobilePhaseA', 'mL', k.lcConsumables, 'kitCalc')}
-          ${kitLcRow('Mobile Phase B', 'mobilePhaseB', 'mL', k.lcConsumables, 'kitCalc')}
-          ${kitLcRow('Autosampler Washing Solution', 'washSolution', 'mL', k.lcConsumables, 'kitCalc')}
-          ${kitLcRow('Precipitant P', 'precipitantP', 'mL', k.lcConsumables, 'kitCalc')}
+          ${kitLcRow('Mobile Phase A', 'mobilePhaseA', k.lcConsumables, 'kitCalc', 'gradientCalc.volA')}
+          ${kitLcRow('Mobile Phase B', 'mobilePhaseB', k.lcConsumables, 'kitCalc', 'gradientCalc.volB')}
+          ${kitLcRow('Autosampler Washing Solution', 'washSolution', k.lcConsumables, 'kitCalc')}
+          ${kitLcRow('Precipitant P', 'precipitantP', k.lcConsumables, 'kitCalc')}
           <tr class="total-row"><td colspan="9">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.lcExtraCost" data-fmt="cur">—</td></tr>
         </tbody>
       </table>
-      <p class="note">"Total required" = volume per sample &times; total samples run across all batches (from the Batch Setup tab). "Packs from kit(s)" comes from the vendor's kit contents (Mobile Phase A/B: 2 packs/kit, Wash Solution: 1 pack/kit, Precipitant P: 2 packs/kit) &times; complete kits purchased above. Add extra packs here if that's not enough.</p>
+      <p class="note">"Total required" = volume per sample &times; total samples run across all batches (from the Batch Setup tab). Mobile Phase A/B's volume per sample is linked to the <strong>LC Method</strong> tab's gradient (A = Water/%A, B = ACN/%B) — edit the gradient there to change it. "Packs from kit(s)" comes from the vendor's kit contents (Mobile Phase A/B: 2 packs/kit, Wash Solution: 1 pack/kit, Precipitant P: 2 packs/kit) &times; complete kits purchased above. Add extra packs here if that's not enough.</p>
     </div>
 
     <div class="card">
