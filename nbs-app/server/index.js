@@ -430,24 +430,47 @@ function calculatorSnapshot(data, calcId) {
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
   if (type === 'kit') {
-    migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out);
+    migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorSet(out);
     migrateKitControlSet(out); ensureKitLevelDefaults(out);
   }
   return { type, name: calculatorNameOf(data, calcId), data: out };
 }
 
-// Mirrors public/app.js's migrateKitCalibratorLevels(): sites saved before
-// the Calibrator Set was split into per-level rows had one lumped
-// "calibratorSet" reagent line. The old numbers carry forward into
-// Calibrator L0 (the safest non-destructive landing spot); every other
-// level starts blank and is filled in by ensureKitLevelDefaults() below.
-// Exports read straight from the database, not the browser's in-memory
-// migrated state, so this recovery runs here too.
-function migrateKitCalibratorLevels(calcData) {
-  if (!calcData || !calcData.kit || !calcData.kit.reagents || calcData.kit.reagents.calibrators) return;
-  const legacy = calcData.kit.reagents.calibratorSet;
-  calcData.kit.reagents.calibrators = legacy ? { l0: { ...legacy, code: undefined } } : {};
-  delete calcData.kit.reagents.calibratorSet;
+// Mirrors public/app.js's migrateKitCalibratorSet(): covers two earlier
+// shapes of the Calibrator Set field — per-level rows (calibrators.l0,
+// calibrators.l1, ..., each with its own packs/cost, meaning the one real
+// purchase got entered more than once) and a flat single calibratorSet line
+// (one shared volPerUseUL for every level, no per-level visibility). The
+// current shape keeps the purchase (packs/kit, extra packs, pack size,
+// cost) shared in ONE place, while `levels` tracks each calibrator level's
+// own required volume separately. Exports read straight from the database,
+// not the browser's in-memory state, so this recovery runs here too.
+function migrateKitCalibratorSet(calcData) {
+  if (!calcData || !calcData.kit || !calcData.kit.reagents) return;
+  const rg = calcData.kit.reagents;
+  if (rg.calibratorSet && rg.calibratorSet.levels) return;
+  const legacyPerLevel = rg.calibrators;
+  const legacyFlat = rg.calibratorSet;
+  const firstLevelKey = legacyPerLevel && Object.keys(legacyPerLevel)[0];
+  const source = legacyFlat || (firstLevelKey ? legacyPerLevel[firstLevelKey] : {}) || {};
+  const levels = {};
+  if (legacyPerLevel) {
+    Object.keys(legacyPerLevel).forEach((key) => {
+      levels[key] = { volPerUseUL: Number(legacyPerLevel[key].volPerUseUL) || 0 };
+    });
+  } else if (legacyFlat && legacyFlat.volPerUseUL !== undefined) {
+    const bs = calcData.batchSetup || {};
+    kitLevelKeys(bs.calLevels).forEach((key) => { levels[key] = { volPerUseUL: Number(legacyFlat.volPerUseUL) || 0 }; });
+  }
+  calcData.kit.reagents.calibratorSet = {
+    code: source.code,
+    packSizeUL: source.packSizeUL !== undefined ? Number(source.packSizeUL) || 0 : 6000,
+    packsPerKit: source.packsPerKit !== undefined ? Number(source.packsPerKit) || 0 : 0,
+    extraPacksPurchased: Number(source.extraPacksPurchased) || 0,
+    costPerPack: Number(source.costPerPack) || 0,
+    levels,
+  };
+  delete calcData.kit.reagents.calibrators;
 }
 
 // Mirrors public/app.js's migrateKitControlSet(): covers two earlier shapes
@@ -490,25 +513,25 @@ function migrateKitControlSet(calcData) {
 // Mirrors public/app.js's ensureKitLevelDefaults(): Batch Setup's
 // calLevels/qcLevels fields are the single source of truth for how many
 // calibrator levels / QC levels there are. Backfills a blank starting
-// config (packsPerKit 0 — never assume packs that were never confirmed) for
-// any calibrator level implied by the current count that doesn't have one
-// yet, and likewise for each QC level's own requirement inside
-// controlSet.levels (the purchase itself stays one shared object — see
-// migrateKitControlSet above). Exports read straight from the database, not
-// the browser's in-memory state, so this runs here too — otherwise an
-// unedited/legacy site would export with missing rows instead of the
-// correct blank ones.
+// requirement (vol/use only) for any level implied by the current count
+// that doesn't have one yet, inside calibratorSet.levels / controlSet.levels
+// (the purchase itself stays one shared object per bundle — see
+// migrateKitCalibratorSet/migrateKitControlSet above). Exports read
+// straight from the database, not the browser's in-memory state, so this
+// runs here too — otherwise an unedited/legacy site would export with
+// missing rows instead of the correct blank ones.
 function ensureKitLevelDefaults(calcData) {
   if (!calcData || !calcData.kit) return;
   calcData.kit.reagents = calcData.kit.reagents || {};
-  calcData.kit.reagents.calibrators = calcData.kit.reagents.calibrators || {};
+  calcData.kit.reagents.calibratorSet = calcData.kit.reagents.calibratorSet
+    || { packSizeUL: 6000, packsPerKit: 0, extraPacksPurchased: 0, costPerPack: 0, levels: {} };
+  calcData.kit.reagents.calibratorSet.levels = calcData.kit.reagents.calibratorSet.levels || {};
   calcData.kit.reagents.controlSet = calcData.kit.reagents.controlSet
     || { packSizeUL: 5000, packsPerKit: 0, extraPacksPurchased: 0, costPerPack: 0, levels: {} };
   calcData.kit.reagents.controlSet.levels = calcData.kit.reagents.controlSet.levels || {};
   const bs = calcData.batchSetup || {};
-  const blankLevel = () => ({ packSizeUL: 1000, packsPerKit: 0, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 });
   kitLevelKeys(bs.calLevels).forEach((key) => {
-    if (!calcData.kit.reagents.calibrators[key]) calcData.kit.reagents.calibrators[key] = blankLevel();
+    if (!calcData.kit.reagents.calibratorSet.levels[key]) calcData.kit.reagents.calibratorSet.levels[key] = { volPerUseUL: 15 };
   });
   kitLevelKeys(bs.qcLevels).forEach((key) => {
     if (!calcData.kit.reagents.controlSet.levels[key]) calcData.kit.reagents.controlSet.levels[key] = { volPerUseUL: 15 };
@@ -523,7 +546,7 @@ function migrateKitReagents(calcData) {
   if (!calcData || !calcData.kit || calcData.kit.reagents) return;
   calcData.kit.reagents = {
     is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
-    calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+    calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
     controlSet: { code: 'MS14082', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
   };
   const items = calcData.kit.additionalItems || [];

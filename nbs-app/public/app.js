@@ -142,12 +142,13 @@ function migrateKitReagents(data) {
   if (!data || !data.kit || data.kit.reagents) return;
   data.kit.reagents = {
     is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
-    calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-    // The QC/control material is usually one bundled pack covering every QC
-    // level (e.g. "ClinChek Plasma Control, Level I & II") — packs/cost are
-    // shared, but `levels` (filled in by ensureKitLevelDefaults) tracks each
-    // QC level's own required volume separately. Same treatment as MS14082
-    // below when it's present as a flat Additional Item.
+    // Both the Calibrator Set and the QC/control material are usually one
+    // bundled pack covering every level (e.g. "ClinChek Plasma Control,
+    // Level I & II") — packs/cost are shared, but `levels` (filled in by
+    // ensureKitLevelDefaults) tracks each level's own required volume
+    // separately. Same treatment as MS14013/MS14082 below when present as a
+    // flat Additional Item.
+    calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
     controlSet: { code: 'MS14082', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
   };
   const items = data.kit.additionalItems || [];
@@ -173,19 +174,50 @@ function migrateKitReagents(data) {
 // global, not a module) — reused here rather than redeclared so both files
 // can't drift apart. It returns ['l0','l1',...] for `count` levels.
 
-// One-time migration: sites saved before the Calibrator Set was split into
-// per-level rows had one lumped "calibratorSet" reagent line. The old line
-// never said how its packs/cost split across levels, so the safest
-// non-destructive landing spot is Calibrator L0 (it carries the old numbers
-// forward unchanged); every other level starts blank and is filled in by
-// ensureKitLevelDefaults() below, which runs on every render and tracks
-// Batch Setup's calLevels count. Skipped once kit.reagents.calibrators
-// already exists.
-function migrateKitCalibratorLevels(data) {
-  if (!data || !data.kit || !data.kit.reagents || data.kit.reagents.calibrators) return;
-  const legacy = data.kit.reagents.calibratorSet;
-  data.kit.reagents.calibrators = legacy ? { l0: { ...legacy, code: undefined } } : {};
-  delete data.kit.reagents.calibratorSet;
+// One-time migration covering two earlier shapes of the Calibrator Set
+// field, exactly mirroring migrateKitControlSet below:
+//  1. Per-level rows (calibrators.l0, calibrators.l1, ...) — each with its
+//     own packs/cost, which meant re-entering the same one real purchase on
+//     every row (a genuine double-count when the numbers were identical).
+//  2. A single flat calibratorSet line with one shared volPerUseUL for
+//     every level (no visibility into whether one level needed more than
+//     another).
+// The current shape keeps the purchase (packs/kit, extra packs, pack size,
+// cost) shared in ONE place — it's one bundle — while `levels` tracks each
+// calibrator level's own required volume separately, so a shortfall in just
+// one level is visible without the purchase itself being entered more than
+// once. Skipped once kit.reagents.calibratorSet.levels already exists.
+function migrateKitCalibratorSet(data) {
+  if (!data || !data.kit || !data.kit.reagents) return;
+  const rg = data.kit.reagents;
+  if (rg.calibratorSet && rg.calibratorSet.levels) return;
+  const legacyPerLevel = rg.calibrators; // shape 1
+  const legacyFlat = rg.calibratorSet; // shape 2
+  const firstLevelKey = legacyPerLevel && Object.keys(legacyPerLevel)[0];
+  const source = legacyFlat || (firstLevelKey ? legacyPerLevel[firstLevelKey] : {}) || {};
+  const levels = {};
+  if (legacyPerLevel) {
+    // Each level's own vol/use is real, level-specific information — worth
+    // keeping even though the packs/cost around it were duplicated.
+    Object.keys(legacyPerLevel).forEach((key) => {
+      levels[key] = { volPerUseUL: Number(legacyPerLevel[key].volPerUseUL) || 0 };
+    });
+  } else if (legacyFlat && legacyFlat.volPerUseUL !== undefined) {
+    // One flat vol/use applied to every current calibrator level as a
+    // starting point — ensureKitLevelDefaults() will add any level this
+    // doesn't cover, and ordinary edits from here are per-level.
+    const bs = data.batchSetup || {};
+    kitLevelKeys(bs.calLevels).forEach((key) => { levels[key] = { volPerUseUL: Number(legacyFlat.volPerUseUL) || 0 }; });
+  }
+  data.kit.reagents.calibratorSet = {
+    code: source.code,
+    packSizeUL: source.packSizeUL !== undefined ? Number(source.packSizeUL) || 0 : 6000,
+    packsPerKit: source.packsPerKit !== undefined ? Number(source.packsPerKit) || 0 : 0,
+    extraPacksPurchased: Number(source.extraPacksPurchased) || 0,
+    costPerPack: Number(source.costPerPack) || 0,
+    levels,
+  };
+  delete data.kit.reagents.calibrators;
 }
 
 // One-time migration covering two earlier shapes of the Control Set field:
@@ -232,32 +264,32 @@ function migrateKitControlSet(data) {
   delete data.kit.reagents.controls;
 }
 
-// Batch Setup's calLevels field is the single source of truth for how many
-// calibrator levels there are — NOT a separate count baked into the kit
-// reagents table, so the two can never disagree. This backfills a blank
-// starting config for any calibrator level implied by the current calLevels
-// that doesn't have one yet (a brand-new calculator, or the count was just
-// increased in Batch Setup) — never touches a level that already has data,
-// and runs on every render since the count can change at any time. Controls
-// work the same way for their per-level REQUIREMENT (controlSet.levels),
-// but the purchase itself (packs/kit, extra packs, pack size, cost) is one
-// shared object, not per-level — see migrateKitControlSet above.
-// blankPacksPerKit defaults to 0 (never assume packs you haven't confirmed
-// you have) — pass 1 only for a brand-new calculator's starting defaults,
-// which mirror the vendor sheet's usual "one vial/pack included per kit".
+// Batch Setup's calLevels/qcLevels fields are the single source of truth
+// for how many calibrator/QC levels there are — NOT a separate count baked
+// into the kit reagents table, so the two can never disagree. This
+// backfills a blank starting requirement (vol/use only) for any level
+// implied by the current calLevels/qcLevels that doesn't have one yet (a
+// brand-new calculator, or the count was just increased in Batch Setup) —
+// never touches a level that already has data, and runs on every render
+// since the count can change at any time. The Calibrator Set and Control
+// Set are each ONE shared purchase object (packs/kit, extra packs, pack
+// size, cost), not per-level — see migrateKitCalibratorSet/
+// migrateKitControlSet above. blankPacksPerKit defaults to 0 (never assume
+// packs you haven't confirmed you have) — pass 1 only for a brand-new
+// calculator's starting defaults, which mirror the vendor sheet's usual
+// "one vial/pack included per kit".
 function ensureKitLevelDefaults(data, blankPacksPerKit) {
   if (!data || !data.kit) return;
   data.kit.reagents = data.kit.reagents || {};
-  data.kit.reagents.calibrators = data.kit.reagents.calibrators || {};
+  data.kit.reagents.calibratorSet = data.kit.reagents.calibratorSet
+    || { packSizeUL: 6000, packsPerKit: blankPacksPerKit || 0, extraPacksPurchased: 0, costPerPack: 0, levels: {} };
+  data.kit.reagents.calibratorSet.levels = data.kit.reagents.calibratorSet.levels || {};
   data.kit.reagents.controlSet = data.kit.reagents.controlSet
     || { packSizeUL: 5000, packsPerKit: blankPacksPerKit || 0, extraPacksPurchased: 0, costPerPack: 0, levels: {} };
   data.kit.reagents.controlSet.levels = data.kit.reagents.controlSet.levels || {};
   const bs = data.batchSetup || {};
-  const blankLevel = () => ({
-    packSizeUL: 1000, packsPerKit: blankPacksPerKit || 0, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15,
-  });
   kitLevelKeys(bs.calLevels).forEach((key) => {
-    if (!data.kit.reagents.calibrators[key]) data.kit.reagents.calibrators[key] = blankLevel();
+    if (!data.kit.reagents.calibratorSet.levels[key]) data.kit.reagents.calibratorSet.levels[key] = { volPerUseUL: 15 };
   });
   kitLevelKeys(bs.qcLevels).forEach((key) => {
     if (!data.kit.reagents.controlSet.levels[key]) data.kit.reagents.controlSet.levels[key] = { volPerUseUL: 15 };
@@ -287,19 +319,17 @@ function defaultCalculatorFields(type) {
           precipitantP: { code: 'MS14021', packSizeML: 20, packsPerKit: 2, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
         },
         // IS is spiked into every sample/cal/QC/blank injection (pack size
-        // is one reconstituted 5 ml vial = 5000 µL). Calibrators are tracked
-        // as separate levels (L0, L1, ...) since each level is usually its
-        // own vial with its own pack size/cost — the NUMBER of levels is
-        // filled in below from Batch Setup's calLevels (see
-        // ensureKitLevelDefaults) rather than fixed here, so it can never
-        // disagree with Batch Setup's own count. Controls/QCs are usually
-        // ONE bundled pack covering every QC level (e.g. ClinChek Level I &
-        // II) — packs/cost stay shared in controlSet, but controlSet.levels
-        // (filled in below from Batch Setup's qcLevels) tracks each level's
-        // own required volume separately.
+        // is one reconstituted 5 ml vial = 5000 µL). The Calibrator Set and
+        // Control Set are each usually ONE bundled pack covering every
+        // level (e.g. a 6-level calibrator set, or a ClinChek Level I & II
+        // control set) — packs/cost stay shared in calibratorSet/controlSet,
+        // but their `levels` sub-objects (filled in below from Batch
+        // Setup's calLevels/qcLevels — see ensureKitLevelDefaults) track
+        // each level's own required volume separately, so it can never
+        // disagree with Batch Setup's own level counts.
         reagents: {
           is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
-          calibrators: {},
+          calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
           controlSet: { code: 'MS14082', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, levels: {} },
         },
         additionalItems: [
@@ -436,7 +466,7 @@ function switchCalculator(targetId) {
   // Backfill: a calculator parked before the LC Method tab existed won't have
   // its own lcGradient yet — give it the shared default rather than an empty table.
   if (!data.lcGradient) data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); migrateKitControlSet(data); ensureKitLevelDefaults(data); }
+  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorSet(data); migrateKitControlSet(data); ensureKitLevelDefaults(data); }
   data.activeCalculatorId = targetId;
 }
 
@@ -499,7 +529,7 @@ async function loadSite(id) {
   // Backfill: a kit calculator saved before the LC Method tab existed won't
   // have an lcGradient at the root yet.
   if (!state.site.data.lcGradient) state.site.data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); migrateKitCalibratorLevels(state.site.data); migrateKitControlSet(state.site.data); ensureKitLevelDefaults(state.site.data); }
+  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); migrateKitCalibratorSet(state.site.data); migrateKitControlSet(state.site.data); ensureKitLevelDefaults(state.site.data); }
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -1439,11 +1469,10 @@ function kitLcRow(label, fieldKey, s, computedPrefix, gradientPath) {
 }
 
 // Same shape as kitLcRow but in microlitres, and against a "uses" count
-// rather than "samples" — IS is used on every injection, calibrator/control
-// levels only on that level's own injections (see computeKitReagentLine).
-// pathPrefix/outPrefix are full dotted paths (e.g. "kit.reagents.calibrators.l1"
-// / "kitCalc.calibrators.l1") rather than a single flat field key, so this
-// works for both the top-level IS row and nested per-level rows.
+// rather than "samples" — IS is used on every injection. IS is purchased and
+// used as a single line (not split into levels), unlike the Calibrator Set
+// and Control Set below, which are each ONE shared purchase checked per
+// level (see kitBundlePurchaseRow/kitBundleLevelRow).
 function kitReagentRow(label, cfg, pathPrefix, outPrefix) {
   cfg = cfg || {};
   return `<tr>
@@ -1462,36 +1491,36 @@ function kitReagentRow(label, cfg, pathPrefix, outPrefix) {
   </tr>`;
 }
 
-// The Control Set's purchase (packs/kit, extra packs, pack size, cost) is
-// ONE shared row — editing it here updates the single controlSet object
-// that every QC level's requirement (rendered by kitControlLevelRow below)
-// checks against. Vol/use and required aren't level-specific here, so those
-// columns are blank ("na") on this row.
-function kitControlSetPurchaseRow(cfg) {
+// A bundled set's purchase (packs/kit, extra packs, pack size, cost) is ONE
+// shared row — editing it here updates the single calibratorSet/controlSet
+// object that every one of its levels' requirements (rendered by
+// kitBundleLevelRow below) checks against. Vol/use and required aren't
+// level-specific here, so those columns are blank ("na") on this row. Used
+// for both the Calibrator Set and the Control Set.
+function kitBundlePurchaseRow(label, cfg, pathPrefix, outPrefix, hint) {
   cfg = cfg || {};
   return `<tr>
-    <td class="label-cell">Control Set (shared purchase)<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')} — one bundle covers every QC level below</div></td>
+    <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}${hint ? ' — ' + hint : ''}</div></td>
     <td class="na">—</td>
     <td class="na">—</td>
-    <td><input type="number" step="any" data-path="kit.reagents.controlSet.packsPerKit" data-type="number" value="${cfg.packsPerKit ?? 0}" /></td>
-    <td class="computed" data-out="kitCalc.controlSet.packsFromKits" data-fmt="int">—</td>
-    <td><input type="number" step="any" data-path="kit.reagents.controlSet.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
-    <td><input type="number" step="any" data-path="kit.reagents.controlSet.packSizeUL" data-type="number" value="${cfg.packSizeUL ?? 0}" /></td>
-    <td class="computed" data-out="kitCalc.controlSet.totalAvailableUL" data-fmt="num2">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.packsPerKit" data-type="number" value="${cfg.packsPerKit ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.packsFromKits" data-fmt="int">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.packSizeUL" data-type="number" value="${cfg.packSizeUL ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.totalAvailableUL" data-fmt="num2">—</td>
     <td class="na">—</td>
     <td class="na">—</td>
-    <td><input type="number" step="any" data-path="kit.reagents.controlSet.costPerPack" data-type="number" value="${cfg.costPerPack ?? 0}" /></td>
-    <td class="computed" data-out="kitCalc.controlSet.extraCost" data-fmt="cur">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.costPerPack" data-type="number" value="${cfg.costPerPack ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.extraCost" data-fmt="cur">—</td>
   </tr>`;
 }
 
-// One QC level's own required-volume check against the shared purchase
-// above — only Vol/use is edited here; packs/pack size/cost are set once on
-// the shared row and shown as "—" here to make clear they're not per-level.
-function kitControlLevelRow(label, key, levelCfg) {
+// One level's own required-volume check against its bundle's shared
+// purchase above — only Vol/use is edited here; packs/pack size/cost are
+// set once on the shared row and shown as "—" here to make clear they're
+// not per-level. Used for both Calibrator and QC levels.
+function kitBundleLevelRow(label, pathPrefix, outPrefix, levelCfg) {
   levelCfg = levelCfg || {};
-  const pathPrefix = `kit.reagents.controlSet.levels.${key}`;
-  const outPrefix = `kitCalc.controlSet.levels.${key}`;
   return `<tr>
     <td class="label-cell">${label}</td>
     <td><input type="number" step="any" data-path="${pathPrefix}.volPerUseUL" data-type="number" value="${levelCfg.volPerUseUL ?? 0}" /></td>
@@ -1513,7 +1542,7 @@ function renderKitSection(container, data) {
   data.kit.completeKits = data.kit.completeKits || { qty: 0, costPerKit: 0, assaysPerKit: 200 };
   data.kit.lcConsumables = data.kit.lcConsumables || {};
   data.kit.additionalItems = data.kit.additionalItems || [];
-  migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); migrateKitControlSet(data); ensureKitLevelDefaults(data); // safety net for calculators saved before these fields existed
+  migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorSet(data); migrateKitControlSet(data); ensureKitLevelDefaults(data); // safety net for calculators saved before these fields existed
   const k = data.kit;
   const items = k.additionalItems;
   const bs = data.batchSetup || {};
@@ -1559,17 +1588,20 @@ function renderKitSection(container, data) {
         </tr></thead>
         <tbody>
           ${kitReagentRow('Internal Standard (IS)', k.reagents.is, 'kit.reagents.is', 'kitCalc.is')}
-          <tr><td colspan="12" class="section-subhead">Calibrators <span style="font-weight:normal;">(${calKeys.length} level${calKeys.length === 1 ? '' : 's'} — set on the Batch Setup tab)</span></td></tr>
-          ${calKeys.map((key, i) => kitReagentRow(
-            `Calibrator L${i}`, k.reagents.calibrators[key], `kit.reagents.calibrators.${key}`, `kitCalc.calibrators.${key}`
+          <tr><td colspan="12" class="section-subhead">Calibrators <span style="font-weight:normal;">(${calKeys.length} level${calKeys.length === 1 ? '' : 's'} — set on the Batch Setup tab; purchased as ONE bundle)</span></td></tr>
+          ${kitBundlePurchaseRow('Calibrator Set (shared purchase)', k.reagents.calibratorSet, 'kit.reagents.calibratorSet', 'kitCalc.calibratorSet', 'one bundle covers every calibrator level below')}
+          ${calKeys.map((key, i) => kitBundleLevelRow(
+            `Calibrator L${i}`, `kit.reagents.calibratorSet.levels.${key}`, `kitCalc.calibratorSet.levels.${key}`, (k.reagents.calibratorSet.levels || {})[key]
           )).join('')}
           <tr><td colspan="12" class="section-subhead">Controls / QC <span style="font-weight:normal;">(${qcKeys.length} level${qcKeys.length === 1 ? '' : 's'} — set on the Batch Setup tab; purchased as ONE bundle)</span></td></tr>
-          ${kitControlSetPurchaseRow(k.reagents.controlSet)}
-          ${qcKeys.map((key, i) => kitControlLevelRow(`Control ${i + 1}`, key, (k.reagents.controlSet.levels || {})[key])).join('')}
+          ${kitBundlePurchaseRow('Control Set (shared purchase)', k.reagents.controlSet, 'kit.reagents.controlSet', 'kitCalc.controlSet', 'one bundle covers every QC level below')}
+          ${qcKeys.map((key, i) => kitBundleLevelRow(
+            `Control ${i + 1}`, `kit.reagents.controlSet.levels.${key}`, `kitCalc.controlSet.levels.${key}`, (k.reagents.controlSet.levels || {})[key]
+          )).join('')}
           <tr class="total-row"><td colspan="10">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.reagentsExtraCost" data-fmt="cur">—</td></tr>
         </tbody>
       </table>
-      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). Each calibrator level (numbered L0, L1, ... to match common vendor numbering, count set by "Calibrator levels per batch" on the <strong>Batch Setup</strong> tab) is only consumed by its own injections, and has its own packs/pack size/cost — a shortfall in a single level shows up on its own row. Controls/QCs are purchased as ONE bundle (packs/kit, extra packs, pack size and cost are set once on the "Control Set" row — edit them there, not per level) but checked per QC level below it, since different levels can need different spike volumes; each level's "Total available" comes from that one shared purchase. "Pack size" for the Control Set is the usable volume PER LEVEL yielded by one bundle (vendor sets are normally packaged symmetrically across levels — e.g. "2 x 5 x 1 ml" = 5 ml per level from one box). Defaults: 1 ml = 1000 µL for a calibrator level, 5 ml = 5000 µL for the control set and for IS — edit per row if your kit differs.</p>
+      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). The Calibrator Set and the Control Set are each purchased as ONE bundle (packs/kit, extra packs, pack size and cost are set once on their "shared purchase" row — edit them there, not per level) but checked per level below it (numbered L0, L1, ... for calibrators to match common vendor numbering, counts set by "Calibrator levels" / "Control (QC) levels" on the <strong>Batch Setup</strong> tab), since different levels can need different spike volumes; each level's "Total available" comes from that one shared purchase, and a shortfall in a single level shows up on its own row. "Pack size" for a bundle is the usable volume PER LEVEL yielded by one bundle (vendor sets are normally packaged symmetrically across levels — e.g. "2 x 5 x 1 ml" = 5 ml per level from one box). Defaults: 6 ml = 6000 µL for the calibrator set, 5 ml = 5000 µL for the control set and for IS — edit per row if your kit differs.</p>
     </div>
 
     <div class="card">
