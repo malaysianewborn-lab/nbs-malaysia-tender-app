@@ -269,14 +269,42 @@ function computeKitLcLine(cfg, kitsQty, totalSamples) {
   };
 }
 
+// Internal Standard (IS) and the Calibrator Set work the same way as an LC
+// consumable (packs/kit x kits purchased, plus extras, vs. how much is
+// required) but in microlitres rather than millilitres, and against a
+// different "how many uses" driver: IS is spiked into every single
+// injection (samples + calibrators + QCs + blanks), while the Calibrator
+// Set is only consumed by calibrator injections.
+function computeKitReagentLine(cfg, kitsQty, requiredUses) {
+  cfg = cfg || {};
+  const packSizeUL = num(cfg.packSizeUL);
+  const packsPerKit = num(cfg.packsPerKit);
+  const packsFromKits = packsPerKit * num(kitsQty);
+  const extraPacksPurchased = num(cfg.extraPacksPurchased);
+  const costPerPack = num(cfg.costPerPack);
+  const volPerUseUL = num(cfg.volPerUseUL);
+  const totalPacks = packsFromKits + extraPacksPurchased;
+  const totalAvailableUL = totalPacks * packSizeUL;
+  const totalRequiredUL = volPerUseUL * num(requiredUses);
+  const surplusUL = totalAvailableUL - totalRequiredUL;
+  const extraCost = extraPacksPurchased * costPerPack;
+  return {
+    packSizeUL, volPerUseUL, packsPerKit, packsFromKits, extraPacksPurchased, totalPacks,
+    totalAvailableUL, totalRequiredUL, surplusUL, sufficient: surplusUL >= 0, extraCost, requiredUses: num(requiredUses),
+  };
+}
+
 // gradientCalc (from computeGradient(data.lcGradient)) drives Mobile Phase
 // A/B's volume-per-sample automatically, same convention as the SOP-based
 // calculator: Mobile Phase A = Water (%A), Mobile Phase B = ACN (%B).
 // Wash Solution and Precipitant P aren't part of the LC gradient, so their
 // volPerSampleML stays a manual field on the kit itself.
-function computeKit(kit, totalSamples, gradientCalc) {
+function computeKit(kit, batchCalc, gradientCalc) {
   kit = kit || {};
+  batchCalc = batchCalc || {};
   gradientCalc = gradientCalc || { volA: 0, volB: 0 };
+  const totalSamples = num(batchCalc.totalSamplesRunAllBatches);
+  const totalCal = num(batchCalc.totalCalAllBatches);
   const completeKits = kit.completeKits || {};
   const kitsQty = num(completeKits.qty);
   const costPerKit = num(completeKits.costPerKit);
@@ -292,16 +320,23 @@ function computeKit(kit, totalSamples, gradientCalc) {
   const lcExtraCost = mobilePhaseA.extraCost + mobilePhaseB.extraCost + washSolution.extraCost + precipitantP.extraCost;
   const lcAllSufficient = mobilePhaseA.sufficient && mobilePhaseB.sufficient && washSolution.sufficient && precipitantP.sufficient;
 
+  const rg = kit.reagents || {};
+  const is = computeKitReagentLine(rg.is, kitsQty, totalSamples);
+  const calibratorSet = computeKitReagentLine(rg.calibratorSet, kitsQty, totalCal);
+  const reagentsExtraCost = is.extraCost + calibratorSet.extraCost;
+  const reagentsAllSufficient = is.sufficient && calibratorSet.sufficient;
+
   const additionalItems = ((kit.additionalItems) || []).map((it) => ({
     ...it, totalCost: num(it && it.qty) * num(it && it.costPerUnit),
   }));
   const additionalItemsTotal = additionalItems.reduce((sum, it) => sum + it.totalCost, 0);
 
-  const totalCost = kitCost + lcExtraCost + additionalItemsTotal;
+  const totalCost = kitCost + lcExtraCost + reagentsExtraCost + additionalItemsTotal;
 
   return {
     kitsQty, costPerKit, assaysPerKit, kitCost, assaysCovered,
     mobilePhaseA, mobilePhaseB, washSolution, precipitantP, lcExtraCost, lcAllSufficient,
+    is, calibratorSet, reagentsExtraCost, reagentsAllSufficient,
     additionalItems, additionalItemsTotal, totalCost,
   };
 }
@@ -310,7 +345,7 @@ function computeKitAll(data) {
   data = data || {};
   const batchCalc = computeBatch(data.batchSetup);
   const gradientCalc = computeGradient(data.lcGradient || []);
-  const kitCalc = computeKit(data.kit, batchCalc.totalSamplesRunAllBatches, gradientCalc);
+  const kitCalc = computeKit(data.kit, batchCalc, gradientCalc);
   const consumablesCalc = computeConsumables(data.consumables);
 
   const grandTotal = kitCalc.totalCost + consumablesCalc.totalCost;
@@ -330,11 +365,13 @@ function computeKitAll(data) {
     summary: {
       kitTotal: kitCalc.kitCost,
       lcExtraTotal: kitCalc.lcExtraCost,
+      reagentsExtraTotal: kitCalc.reagentsExtraCost,
       additionalItemsTotal: kitCalc.additionalItemsTotal,
       consumablesTotal: consumablesCalc.totalCost,
       grandTotal, costPerBatch, costPerStudySample,
       assaysRequired, assaysCovered: kitCalc.assaysCovered, assaysSurplus,
       assaysSufficient: assaysSurplus >= 0, lcAllSufficient: kitCalc.lcAllSufficient,
+      reagentsAllSufficient: kitCalc.reagentsAllSufficient,
     },
   };
 }

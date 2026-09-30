@@ -429,8 +429,32 @@ function calculatorSnapshot(data, calcId) {
   out.currency = data.currency;
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
-  if (type === 'kit') migrateKitPacksPerKit(out);
+  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); }
   return { type, name: calculatorNameOf(data, calcId), data: out };
+}
+
+// Mirrors public/app.js's migrateKitReagents(): sites saved before the IS &
+// Calibrator Usage table existed had MS14012/MS14013 as flat "Additional
+// Items" lines. Exports read straight from the database, not the browser's
+// in-memory migrated state, so this recovery runs here too.
+function migrateKitReagents(calcData) {
+  if (!calcData || !calcData.kit || calcData.kit.reagents) return;
+  calcData.kit.reagents = {
+    is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
+    calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+  };
+  const items = calcData.kit.additionalItems || [];
+  const isItem = items.find((it) => it && it.code === 'MS14012');
+  if (isItem) {
+    calcData.kit.reagents.is.extraPacksPurchased = Number(isItem.qty) || 0;
+    calcData.kit.reagents.is.costPerPack = Number(isItem.costPerUnit) || 0;
+  }
+  const calItem = items.find((it) => it && it.code === 'MS14013');
+  if (calItem) {
+    calcData.kit.reagents.calibratorSet.extraPacksPurchased = Number(calItem.qty) || 0;
+    calcData.kit.reagents.calibratorSet.costPerPack = Number(calItem.costPerUnit) || 0;
+  }
+  calcData.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013'));
 }
 
 // One-time migration, mirroring the same helper in public/app.js: covers
