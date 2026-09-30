@@ -158,6 +158,35 @@ function migrateKitReagents(data) {
   data.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013'));
 }
 
+const KIT_CAL_LEVEL_KEYS = ['l1', 'l2', 'l3', 'l4', 'l5'];
+const KIT_QC_LEVEL_KEYS = ['l1', 'l2'];
+
+// One-time migration: sites saved before the Calibrator Set was split into
+// L1-L5 calibrator levels and 2 control (QC) levels had one lumped
+// "calibratorSet" reagent line, and no control/QC tracking at all. The old
+// line never said how its packs/cost split across levels, so the safest
+// non-destructive landing spot is Calibrator L1 (it carries the old
+// numbers forward unchanged); L2-L5 and both control levels start blank
+// (0 packs/kit) with the same vol/use and pack size as a starting point, so
+// nothing existing is lost, double-counted, or silently reassigned to the
+// wrong level. Skipped once kit.reagents.calibrators already exists.
+function migrateKitCalibratorLevels(data) {
+  if (!data || !data.kit || !data.kit.reagents || data.kit.reagents.calibrators) return;
+  const legacy = data.kit.reagents.calibratorSet;
+  const blankLevel = () => ({
+    packSizeUL: legacy ? legacy.packSizeUL : 1000,
+    packsPerKit: 0,
+    extraPacksPurchased: 0,
+    costPerPack: 0,
+    volPerUseUL: legacy ? legacy.volPerUseUL : 15,
+  });
+  data.kit.reagents.calibrators = { l1: legacy ? { ...legacy, code: undefined } : blankLevel() };
+  KIT_CAL_LEVEL_KEYS.slice(1).forEach((key) => { data.kit.reagents.calibrators[key] = blankLevel(); });
+  data.kit.reagents.controls = {};
+  KIT_QC_LEVEL_KEYS.forEach((key) => { data.kit.reagents.controls[key] = blankLevel(); });
+  delete data.kit.reagents.calibratorSet;
+}
+
 // The starting field values for a brand-new/never-used calculator slot.
 function defaultCalculatorFields(type) {
   if (type === 'kit') {
@@ -180,14 +209,27 @@ function defaultCalculatorFields(type) {
           washSolution: { code: 'MS14005', packSizeML: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
           precipitantP: { code: 'MS14021', packSizeML: 20, packsPerKit: 2, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
         },
-        // IS is spiked into every sample/cal/QC/blank injection; the
-        // Calibrator Set is consumed only by calibrator injections
-        // (calLevels x calReps, across all batches). Pack size is the usable
-        // volume from ONE reconstituted vial/set (IS: one 5 ml vial;
-        // Calibrator Set: 6 levels x 1 ml = 6 ml total across the set).
+        // IS is spiked into every sample/cal/QC/blank injection (pack size
+        // is one reconstituted 5 ml vial = 5000 µL). Calibrators and
+        // controls/QCs are each tracked as separate levels (5 calibrator
+        // levels L1-L5, 2 control levels) rather than one lumped set, since
+        // each level is usually its own vial with its own pack size/cost;
+        // every level within a group runs calReps (or qcReps) times per
+        // batch, across all batches. Pack size defaults to one 1 ml vial
+        // per level (1000 µL) — edit per level if your kit differs.
         reagents: {
           is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
-          calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+          calibrators: {
+            l1: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+            l2: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+            l3: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+            l4: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+            l5: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+          },
+          controls: {
+            l1: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+            l2: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+          },
         },
         additionalItems: [
           { code: 'MS14014', name: 'Optimisation Mix, lyophil.', unit: '6 x 1 x 1 ml', qty: 0, costPerUnit: 0 },
@@ -317,7 +359,7 @@ function switchCalculator(targetId) {
   // Backfill: a calculator parked before the LC Method tab existed won't have
   // its own lcGradient yet — give it the shared default rather than an empty table.
   if (!data.lcGradient) data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); }
+  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); }
   data.activeCalculatorId = targetId;
 }
 
@@ -380,7 +422,7 @@ async function loadSite(id) {
   // Backfill: a kit calculator saved before the LC Method tab existed won't
   // have an lcGradient at the root yet.
   if (!state.site.data.lcGradient) state.site.data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); }
+  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); migrateKitCalibratorLevels(state.site.data); }
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -1320,23 +1362,26 @@ function kitLcRow(label, fieldKey, s, computedPrefix, gradientPath) {
 }
 
 // Same shape as kitLcRow but in microlitres, and against a "uses" count
-// rather than "samples" — IS is used on every injection, the Calibrator Set
-// only on calibrator injections (see computeKitReagentLine).
-function kitReagentRow(label, fieldKey, s, computedPrefix) {
-  const cfg = s[fieldKey] || {};
+// rather than "samples" — IS is used on every injection, calibrator/control
+// levels only on that level's own injections (see computeKitReagentLine).
+// pathPrefix/outPrefix are full dotted paths (e.g. "kit.reagents.calibrators.l1"
+// / "kitCalc.calibrators.l1") rather than a single flat field key, so this
+// works for both the top-level IS row and nested per-level rows.
+function kitReagentRow(label, cfg, pathPrefix, outPrefix) {
+  cfg = cfg || {};
   return `<tr>
     <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}</div></td>
-    <td><input type="number" step="any" data-path="kit.reagents.${fieldKey}.volPerUseUL" data-type="number" value="${cfg.volPerUseUL ?? 0}" /></td>
-    <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalRequiredUL" data-fmt="num2">—</td>
-    <td><input type="number" step="any" data-path="kit.reagents.${fieldKey}.packsPerKit" data-type="number" value="${cfg.packsPerKit ?? 0}" /></td>
-    <td class="computed" data-out="${computedPrefix}.${fieldKey}.packsFromKits" data-fmt="int">—</td>
-    <td><input type="number" step="any" data-path="kit.reagents.${fieldKey}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
-    <td><input type="number" step="any" data-path="kit.reagents.${fieldKey}.packSizeUL" data-type="number" value="${cfg.packSizeUL ?? 0}" /></td>
-    <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalAvailableUL" data-fmt="num2">—</td>
-    <td class="computed" data-out="${computedPrefix}.${fieldKey}.surplusUL" data-fmt="num2" data-warn-negative="1">—</td>
-    <td><span class="sufficiency-badge" data-badge="kitCalc.${fieldKey}.sufficient">—</span></td>
-    <td><input type="number" step="any" data-path="kit.reagents.${fieldKey}.costPerPack" data-type="number" value="${cfg.costPerPack ?? 0}" /></td>
-    <td class="computed" data-out="${computedPrefix}.${fieldKey}.extraCost" data-fmt="cur">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.volPerUseUL" data-type="number" value="${cfg.volPerUseUL ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.totalRequiredUL" data-fmt="num2">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.packsPerKit" data-type="number" value="${cfg.packsPerKit ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.packsFromKits" data-fmt="int">—</td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.packSizeUL" data-type="number" value="${cfg.packSizeUL ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.totalAvailableUL" data-fmt="num2">—</td>
+    <td class="computed" data-out="${outPrefix}.surplusUL" data-fmt="num2" data-warn-negative="1">—</td>
+    <td><span class="sufficiency-badge" data-badge="${outPrefix}.sufficient">—</span></td>
+    <td><input type="number" step="any" data-path="${pathPrefix}.costPerPack" data-type="number" value="${cfg.costPerPack ?? 0}" /></td>
+    <td class="computed" data-out="${outPrefix}.extraCost" data-fmt="cur">—</td>
   </tr>`;
 }
 
@@ -1345,7 +1390,7 @@ function renderKitSection(container, data) {
   data.kit.completeKits = data.kit.completeKits || { qty: 0, costPerKit: 0, assaysPerKit: 200 };
   data.kit.lcConsumables = data.kit.lcConsumables || {};
   data.kit.additionalItems = data.kit.additionalItems || [];
-  migrateKitPacksPerKit(data); migrateKitReagents(data); // safety net for calculators saved before these fields existed
+  migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); // safety net for calculators saved before these fields existed
   const k = data.kit;
   const items = k.additionalItems;
   container.innerHTML = `
@@ -1379,7 +1424,7 @@ function renderKitSection(container, data) {
     </div>
 
     <div class="card">
-      <h2>IS &amp; Calibrator Usage <span style="font-weight:normal;font-size:12px;">(is what's included/purchased enough for your batch design?)</span></h2>
+      <h2>IS, Calibrator &amp; Control Usage <span style="font-weight:normal;font-size:12px;">(is what's included/purchased enough for your batch design?)</span></h2>
       <table class="calc-table">
         <thead><tr>
           <th>Component</th><th>Vol/use (µL)</th><th>Total required (µL)</th><th>Packs/kit</th><th>Packs from kit(s)</th>
@@ -1387,12 +1432,19 @@ function renderKitSection(container, data) {
           <th>Status</th><th>Cost/extra pack ${curLabel()}</th><th>Extra pack cost ${curLabel()}</th>
         </tr></thead>
         <tbody>
-          ${kitReagentRow('Internal Standard (IS)', 'is', k.reagents, 'kitCalc')}
-          ${kitReagentRow('Calibrator Set', 'calibratorSet', k.reagents, 'kitCalc')}
+          ${kitReagentRow('Internal Standard (IS)', k.reagents.is, 'kit.reagents.is', 'kitCalc.is')}
+          <tr><td colspan="12" class="section-subhead">Calibrators</td></tr>
+          ${KIT_CAL_LEVEL_KEYS.map((key, i) => kitReagentRow(
+            `Calibrator L${i + 1}`, k.reagents.calibrators[key], `kit.reagents.calibrators.${key}`, `kitCalc.calibrators.${key}`
+          )).join('')}
+          <tr><td colspan="12" class="section-subhead">Controls / QC</td></tr>
+          ${KIT_QC_LEVEL_KEYS.map((key, i) => kitReagentRow(
+            `Control ${i + 1}`, k.reagents.controls[key], `kit.reagents.controls.${key}`, `kitCalc.controls.${key}`
+          )).join('')}
           <tr class="total-row"><td colspan="10">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.reagentsExtraCost" data-fmt="cur">—</td></tr>
         </tbody>
       </table>
-      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). The Calibrator Set is only consumed by calibrator injections (calibrator levels &times; replicates, across all batches). "Pack size" is the usable volume from ONE reconstituted vial/set (defaults: IS 5 ml vial = 5000 µL; Calibrator Set 6 levels &times; 1 ml = 6000 µL total) — edit if your kit differs.</p>
+      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). Each calibrator level (L1-L5) and each control level is only consumed by its own injections (replicates per level &times; batches, from the Batch Setup tab) — a shortfall in a single level shows up on its own row rather than being averaged into one lumped total. "Pack size" is the usable volume from ONE reconstituted vial for that level (default 1 ml = 1000 µL per level; IS defaults to a 5 ml vial = 5000 µL) — edit per row if your kit differs.</p>
     </div>
 
     <div class="card">
@@ -1425,7 +1477,7 @@ function renderKitSummary(container, data) {
     <div class="summary-grid">
       <div class="summary-box"><div class="label">Complete Kit(s)</div><div class="amount" data-out="summary.kitTotal" data-fmt="cur">—</div></div>
       <div class="summary-box"><div class="label">Extra LC Packs</div><div class="amount" data-out="summary.lcExtraTotal" data-fmt="cur">—</div></div>
-      <div class="summary-box"><div class="label">Extra IS &amp; Calibrator</div><div class="amount" data-out="summary.reagentsExtraTotal" data-fmt="cur">—</div></div>
+      <div class="summary-box"><div class="label">Extra IS, Cal &amp; Control</div><div class="amount" data-out="summary.reagentsExtraTotal" data-fmt="cur">—</div></div>
       <div class="summary-box"><div class="label">Additional Items</div><div class="amount" data-out="summary.additionalItemsTotal" data-fmt="cur">—</div></div>
       <div class="summary-box"><div class="label">Consumables</div><div class="amount" data-out="summary.consumablesTotal" data-fmt="cur">—</div></div>
       <div class="summary-box grand"><div class="label">SUBTOTAL (before freight &amp; tax)</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">—</div></div>
@@ -1442,7 +1494,7 @@ function renderKitSummary(container, data) {
       <div class="field-row"><label>Mobile phases / wash solution / precipitant</label>
         <span class="sufficiency-badge" data-badge="summary.lcAllSufficient">—</span>
         <span class="hint">See the Kit &amp; Components tab for the per-component breakdown.</span></div>
-      <div class="field-row"><label>Internal Standard &amp; Calibrator Set</label>
+      <div class="field-row"><label>Internal Standard, Calibrators &amp; Controls</label>
         <span class="sufficiency-badge" data-badge="summary.reagentsAllSufficient">—</span>
         <span class="hint">See the Kit &amp; Components tab for the per-component breakdown.</span></div>
     </div>

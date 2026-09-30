@@ -154,6 +154,10 @@ table.calc-table input {
 table.calc-table .computed { color: #111; font-weight: 500; }
 table.calc-table .linked { color: var(--link-text); font-weight: 500; }
 table.calc-table tr.total-row td { background: var(--gray-bg); font-weight: bold; }
+table.calc-table td.section-subhead {
+  background: var(--gray-bg); font-weight: 600; text-align: left; padding-top: 8px; padding-bottom: 4px;
+  border-top: 1px solid var(--border);
+}
 table.calc-table .na { color: #aaa; }
 table.calc-table .warn { background: #ffc7ce; color: #9c0006; font-weight: bold; }
 

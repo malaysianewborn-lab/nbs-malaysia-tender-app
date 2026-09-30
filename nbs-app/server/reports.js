@@ -7,6 +7,7 @@
 
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
+const { KIT_CAL_LEVEL_KEYS, KIT_QC_LEVEL_KEYS } = require('../public/calc.js');
 
 function currencyOf(site) {
   return (site.data && site.data.currency) || { code: 'USD', symbol: '$' };
@@ -296,7 +297,7 @@ async function buildKitExcelReport(site, computed, calcName) {
   [
     ['Complete Kit(s)', computed.summary.kitTotal],
     ['Extra LC Packs', computed.summary.lcExtraTotal],
-    ['Extra IS & Calibrator', computed.summary.reagentsExtraTotal],
+    ['Extra IS, Cal & Control', computed.summary.reagentsExtraTotal],
     ['Additional Items', computed.summary.additionalItemsTotal],
     ['Consumables', computed.summary.consumablesTotal],
   ].forEach(([label, val]) => sSummary.addRow([label, fmtCur(val)]));
@@ -321,7 +322,7 @@ async function buildKitExcelReport(site, computed, calcName) {
   assaysRow.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: computed.summary.assaysSufficient ? GREEN : RED } }; });
   const lcRow = sSummary.addRow(['LC solvents (MPA/MPB/Wash/Precipitant)', computed.summary.lcAllSufficient ? 'Sufficient' : 'Shortfall — see Kit & Components sheet']);
   lcRow.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: computed.summary.lcAllSufficient ? GREEN : RED } }; });
-  const rgRow = sSummary.addRow(['Internal Standard & Calibrator Set', computed.summary.reagentsAllSufficient ? 'Sufficient' : 'Shortfall — see Kit & Components sheet']);
+  const rgRow = sSummary.addRow(['Internal Standard, Calibrators & Controls', computed.summary.reagentsAllSufficient ? 'Sufficient' : 'Shortfall — see Kit & Components sheet']);
   rgRow.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: computed.summary.reagentsAllSufficient ? GREEN : RED } }; });
 
   addBatchSetupSheetXlsx(wb, site, computed);
@@ -361,13 +362,10 @@ async function buildKitExcelReport(site, computed, calcName) {
   });
   styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.lcExtraCost)]));
   sKit.addRow([]);
-  styleSubheading(sKit, sKit.addRow(['IS & Calibrator Usage', '', '', '', '', '', '', '', '', '', '', '']));
+  styleSubheading(sKit, sKit.addRow(['IS, Calibrator & Control Usage', '', '', '', '', '', '', '', '', '', '', '']));
   const rgHead = sKit.addRow(['Component', 'Vol/use (µL)', 'Total required (µL)', 'Packs/kit', 'Packs from kit(s)', 'Extra packs bought', 'Pack size (µL)', 'Total available (µL)', 'Surplus/shortfall (µL)', 'Status', `Cost/extra pack (${currency.symbol})`, curCol]);
   styleHeaderRow(rgHead);
-  [
-    ['Internal Standard (IS)', kc.is],
-    ['Calibrator Set', kc.calibratorSet],
-  ].forEach(([label, line]) => {
+  const addReagentLineRow = (label, line) => {
     const r = sKit.addRow([
       label, line.volPerUseUL, line.totalRequiredUL.toFixed(2), line.packsPerKit, line.packsFromKits,
       line.extraPacksPurchased, line.packSizeUL, line.totalAvailableUL.toFixed(2), line.surplusUL.toFixed(2),
@@ -375,7 +373,12 @@ async function buildKitExcelReport(site, computed, calcName) {
     ]);
     r.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: line.sufficient ? GREEN : RED } };
     if (line.surplusUL < 0) r.getCell(9).font = { bold: true, color: { argb: 'FF9C0006' } };
-  });
+  };
+  addReagentLineRow('Internal Standard (IS)', kc.is);
+  styleSubheading(sKit, sKit.addRow(['Calibrators', '', '', '', '', '', '', '', '', '', '', '']));
+  KIT_CAL_LEVEL_KEYS.forEach((key, i) => addReagentLineRow(`Calibrator L${i + 1}`, kc.calibrators[key]));
+  styleSubheading(sKit, sKit.addRow(['Controls / QC', '', '', '', '', '', '', '', '', '', '', '']));
+  KIT_QC_LEVEL_KEYS.forEach((key, i) => addReagentLineRow(`Control ${i + 1}`, kc.controls[key]));
   styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.reagentsExtraCost)]));
   sKit.addRow([]);
   styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '', '']));
@@ -557,17 +560,19 @@ function buildKitPdfReport(site, computed, res, calcName) {
   });
   h.row('Extra LC packs cost', fmtCur(kc.lcExtraCost));
 
-  h.ensureSpace(140);
-  h.sectionTitle('IS & Calibrator Usage');
-  [
-    ['Internal Standard (IS)', kc.is],
-    ['Calibrator Set', kc.calibratorSet],
-  ].forEach(([label, line]) => {
+  h.ensureSpace(60);
+  h.sectionTitle('IS, Calibrator & Control Usage');
+  const addReagentLinePdf = (label, line) => {
+    h.ensureSpace(60);
     h.row(`${label}: packs/kit × kits = packs from kit(s)`, `${fmtNum(line.packsPerKit)} × ${fmtNum(kc.kitsQty)} = ${fmtNum(line.packsFromKits)}`);
     h.row(`${label}: required (µL) / available (µL)`, `${line.totalRequiredUL.toFixed(1)} / ${line.totalAvailableUL.toFixed(1)}`);
     h.row(`${label} status`, line.sufficient ? 'Sufficient' : `Shortfall (${line.surplusUL.toFixed(1)} µL)`, { bold: !line.sufficient, color: line.sufficient ? '#14632f' : '#9c0006' });
-  });
-  h.row('Extra IS & Calibrator cost', fmtCur(kc.reagentsExtraCost));
+  };
+  addReagentLinePdf('Internal Standard (IS)', kc.is);
+  KIT_CAL_LEVEL_KEYS.forEach((key, i) => addReagentLinePdf(`Calibrator L${i + 1}`, kc.calibrators[key]));
+  KIT_QC_LEVEL_KEYS.forEach((key, i) => addReagentLinePdf(`Control ${i + 1}`, kc.controls[key]));
+  h.ensureSpace(30);
+  h.row('Extra IS, Cal & Control cost', fmtCur(kc.reagentsExtraCost));
 
   h.ensureSpace(100);
   h.sectionTitle('Additional / Separately Purchased Items');
@@ -581,7 +586,7 @@ function buildKitPdfReport(site, computed, res, calcName) {
   h.sectionTitle('Cost Breakdown');
   h.row('Complete Kit(s)', fmtCur(computed.summary.kitTotal));
   h.row('Extra LC Packs', fmtCur(computed.summary.lcExtraTotal));
-  h.row('Extra IS & Calibrator', fmtCur(computed.summary.reagentsExtraTotal));
+  h.row('Extra IS, Cal & Control', fmtCur(computed.summary.reagentsExtraTotal));
   h.row('Additional Items', fmtCur(computed.summary.additionalItemsTotal));
   h.row('Consumables', fmtCur(computed.summary.consumablesTotal));
   doc.moveDown(0.2);
@@ -593,7 +598,7 @@ function buildKitPdfReport(site, computed, res, calcName) {
   h.row('Assays covered by kit(s)', fmtNum(computed.summary.assaysCovered));
   h.row('Surplus / shortfall', fmtNum(computed.summary.assaysSurplus), { bold: true, color: computed.summary.assaysSufficient ? '#14632f' : '#9c0006' });
   h.row('LC solvents overall', computed.summary.lcAllSufficient ? 'Sufficient' : 'Shortfall', { bold: true, color: computed.summary.lcAllSufficient ? '#14632f' : '#9c0006' });
-  h.row('IS & Calibrator overall', computed.summary.reagentsAllSufficient ? 'Sufficient' : 'Shortfall', { bold: true, color: computed.summary.reagentsAllSufficient ? '#14632f' : '#9c0006' });
+  h.row('IS, Calibrators & Controls overall', computed.summary.reagentsAllSufficient ? 'Sufficient' : 'Shortfall', { bold: true, color: computed.summary.reagentsAllSufficient ? '#14632f' : '#9c0006' });
 
   addFreightTaxPdf(doc, h, site, computed, fmtCur);
   addNotesPdf(doc, h, site);

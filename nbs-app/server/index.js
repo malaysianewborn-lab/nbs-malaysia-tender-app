@@ -429,8 +429,35 @@ function calculatorSnapshot(data, calcId) {
   out.currency = data.currency;
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
-  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); }
+  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out); }
   return { type, name: calculatorNameOf(data, calcId), data: out };
+}
+
+const KIT_CAL_LEVEL_KEYS_SNAPSHOT = ['l1', 'l2', 'l3', 'l4', 'l5'];
+const KIT_QC_LEVEL_KEYS_SNAPSHOT = ['l1', 'l2'];
+
+// Mirrors public/app.js's migrateKitCalibratorLevels(): sites saved before
+// the Calibrator Set was split into L1-L5 calibrator levels and 2 control
+// (QC) levels had one lumped "calibratorSet" reagent line and no control/QC
+// tracking. The old numbers carry forward into Calibrator L1 (the safest
+// non-destructive landing spot); L2-L5 and both control levels start blank.
+// Exports read straight from the database, not the browser's in-memory
+// migrated state, so this recovery runs here too.
+function migrateKitCalibratorLevels(calcData) {
+  if (!calcData || !calcData.kit || !calcData.kit.reagents || calcData.kit.reagents.calibrators) return;
+  const legacy = calcData.kit.reagents.calibratorSet;
+  const blankLevel = () => ({
+    packSizeUL: legacy ? legacy.packSizeUL : 1000,
+    packsPerKit: 0,
+    extraPacksPurchased: 0,
+    costPerPack: 0,
+    volPerUseUL: legacy ? legacy.volPerUseUL : 15,
+  });
+  calcData.kit.reagents.calibrators = { l1: legacy ? { ...legacy, code: undefined } : blankLevel() };
+  KIT_CAL_LEVEL_KEYS_SNAPSHOT.slice(1).forEach((key) => { calcData.kit.reagents.calibrators[key] = blankLevel(); });
+  calcData.kit.reagents.controls = {};
+  KIT_QC_LEVEL_KEYS_SNAPSHOT.forEach((key) => { calcData.kit.reagents.controls[key] = blankLevel(); });
+  delete calcData.kit.reagents.calibratorSet;
 }
 
 // Mirrors public/app.js's migrateKitReagents(): sites saved before the IS &
