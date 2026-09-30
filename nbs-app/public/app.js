@@ -158,8 +158,9 @@ function migrateKitReagents(data) {
   data.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013'));
 }
 
-const KIT_CAL_LEVEL_KEYS = ['l1', 'l2', 'l3', 'l4', 'l5'];
-const KIT_QC_LEVEL_KEYS = ['l1', 'l2'];
+// KIT_CAL_LEVEL_KEYS / KIT_QC_LEVEL_KEYS come from calc.js (loaded before
+// this file as a plain global, not a module) — reused here rather than
+// redeclared so both files can't drift apart.
 
 // One-time migration: sites saved before the Calibrator Set was split into
 // L1-L5 calibrator levels and 2 control (QC) levels had one lumped
