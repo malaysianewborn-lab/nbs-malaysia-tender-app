@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
+    "archiver": "^7.0.1",
     "cookie-session": "^2.1.0",
     "cors": "^2.8.5",
     "exceljs": "^4.4.0",

@@ -8,6 +8,7 @@ const express = require('express');
 const cors = require('cors');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
+const archiver = require('archiver');
 const { createClient } = require('@supabase/supabase-js');
 const { computeAll, computeKitAll, kitLevelKeys } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
 const { buildExcelReport, buildPdfReport, buildKitExcelReport, buildKitPdfReport } = require('./reports.js');
@@ -257,6 +258,52 @@ app.put('/api/sites/:siteId/files/:fileId/move', requireAuth, asyncHandler(async
     .eq('site_id', req.params.siteId));
   if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
+}));
+
+// Download every file in a category (optionally narrowed to one folder) as
+// a single .zip — the "Download all" button next to a folder or a file
+// section. Registered ahead of the /:fileId route below so "download-zip"
+// is never swallowed by it as a file id. Duplicate filenames (two files with
+// the same name, in different folders or re-uploaded) are numbered so
+// nothing silently overwrites another entry inside the zip.
+app.get('/api/sites/:siteId/files/download-zip', requireAuth, asyncHandler(async (req, res) => {
+  const category = req.query.category;
+  if (!VALID_CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
+  let query = supabase
+    .from('supporting_files')
+    .select('filename, mime_type, file_data, folder_id')
+    .eq('site_id', req.params.siteId)
+    .eq('category', category);
+  const { folderId } = req.query;
+  if (folderId === 'unfiled') query = query.is('folder_id', null);
+  else if (folderId) query = query.eq('folder_id', folderId);
+  const { data: files, error } = await withRetry(() => query);
+  if (error) return res.status(500).json({ error: error.message });
+  if (!files || !files.length) return res.status(404).json({ error: 'No files to download' });
+
+  let zipLabel = category.replace(/_/g, '-');
+  if (folderId && folderId !== 'unfiled') {
+    const { data: folder } = await withRetry(() => supabase.from('file_folders').select('name').eq('id', folderId).single());
+    if (folder && folder.name) zipLabel = folder.name.replace(/[^a-z0-9\- ]+/gi, '').trim() || zipLabel;
+  }
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(zipLabel)}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  archive.on('error', (err) => { if (!res.headersSent) res.status(500); res.end(); console.error('zip error:', err); });
+  archive.pipe(res);
+  const usedNames = new Map();
+  files.forEach((f) => {
+    let name = f.filename || 'file';
+    const count = usedNames.get(name) || 0;
+    usedNames.set(name, count + 1);
+    if (count > 0) {
+      const dot = name.lastIndexOf('.');
+      name = dot > 0 ? `${name.slice(0, dot)} (${count})${name.slice(dot)}` : `${name} (${count})`;
+    }
+    archive.append(Buffer.from(f.file_data, 'base64'), { name });
+  });
+  archive.finalize();
 }));
 
 app.get('/api/sites/:siteId/files/:fileId', requireAuth, asyncHandler(async (req, res) => {

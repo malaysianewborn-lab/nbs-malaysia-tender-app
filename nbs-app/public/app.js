@@ -1747,7 +1747,10 @@ async function loadFileList(key, category, imageGrid) {
       api(`/api/sites/${state.siteId}/folders?category=${encodeURIComponent(category)}`),
     ]);
 
-    const toolbarHtml = `<div class="folder-toolbar"><button type="button" class="btn-add-row" data-new-folder="${key}" data-folder-category="${category}">+ New Folder</button></div>`;
+    const downloadAllBtn = files.length
+      ? `<button type="button" class="btn-add-row" data-download-zip data-zip-category="${category}" title="Download every file in this section as one .zip">⬇ Download All (.zip)</button>`
+      : '';
+    const toolbarHtml = `<div class="folder-toolbar"><button type="button" class="btn-add-row" data-new-folder="${key}" data-folder-category="${category}">+ New Folder</button>${downloadAllBtn}</div>`;
 
     if (files.length === 0 && folders.length === 0) {
       listEl.innerHTML = `${toolbarHtml}<p class="note">No files uploaded yet.</p>`;
@@ -1777,6 +1780,7 @@ async function loadFileList(key, category, imageGrid) {
             <span class="folder-name">${escapeHtml(fo.name)}</span>
             <span class="folder-count">${items.length}</span>
             <span class="folder-actions">
+              ${items.length ? `<button type="button" data-download-zip data-zip-category="${category}" data-zip-folder="${fo.id}" title="Download this folder as one .zip">\u2b07</button>` : ''}
               <button type="button" data-rename-folder="${fo.id}" data-folder-key="${key}" data-folder-category="${category}" title="Rename folder">\u270e</button>
               <button type="button" data-delete-folder="${fo.id}" data-folder-key="${key}" data-folder-category="${category}" title="Delete folder (files stay, moved to No folder)">\u2715</button>
             </span>
@@ -1785,7 +1789,9 @@ async function loadFileList(key, category, imageGrid) {
         </div>`;
     }).join('');
 
-    const unfiledLabel = folders.length ? '<div class="subcategory-heading" style="margin-top:16px;">No folder</div>' : '';
+    const unfiledLabel = folders.length
+      ? `<div class="subcategory-heading" style="margin-top:16px;display:flex;align-items:center;gap:8px;">No folder${unfiled.length ? `<button type="button" class="btn-download-zip-inline" data-download-zip data-zip-category="${category}" data-zip-folder="unfiled" title="Download these individual files as one .zip">⬇ Download (.zip)</button>` : ''}</div>`
+      : '';
     const unfiledHtml = unfiled.length
       ? (imageGrid ? `<div class="image-grid">${unfiled.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join('')}</div>`
                    : unfiled.map((f) => fileRowHtml(f, key, category, imageGrid, folders)).join(''))
@@ -1831,6 +1837,14 @@ async function loadFileList(key, category, imageGrid) {
       sel.addEventListener('change', async () => {
         await api(`/api/sites/${state.siteId}/files/${sel.dataset.moveFile}/move`, { method: 'PUT', body: JSON.stringify({ folder_id: sel.value || null }) });
         await loadFileList(sel.dataset.fileKey, sel.dataset.fileCategory, imageGrid);
+      });
+    });
+    listEl.querySelectorAll('[data-download-zip]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const params = new URLSearchParams({ category: btn.dataset.zipCategory });
+        if (btn.dataset.zipFolder) params.set('folderId', btn.dataset.zipFolder);
+        window.open(`/api/sites/${state.siteId}/files/download-zip?${params.toString()}`, '_blank');
       });
     });
   } catch (err) {

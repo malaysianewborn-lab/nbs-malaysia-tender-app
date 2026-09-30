@@ -283,7 +283,8 @@ table.calc-table .warn { background: #ffc7ce; color: #9c0006; font-weight: bold;
 .subcategory-heading:first-child { margin-top: 0; }
 
 /* ---------- Folders (grouping uploaded files) ---------- */
-.folder-toolbar { margin-bottom: 12px; }
+.folder-toolbar { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.folder-toolbar .btn-add-row { margin-top: 0; }
 .file-folder {
   border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; background: #fafbfc;
 }
@@ -302,6 +303,11 @@ table.calc-table .warn { background: #ffc7ce; color: #9c0006; font-weight: bold;
   width: 22px; height: 22px; cursor: pointer; font-size: 11px; line-height: 1;
 }
 .folder-actions button:hover { background: white; }
+.btn-download-zip-inline {
+  background: transparent; border: 1px solid var(--border); color: #555; border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; font-size: 11.5px; line-height: 1.6;
+}
+.btn-download-zip-inline:hover { background: white; }
 .file-folder-body { padding: 10px 12px; }
 .file-folder-body .discussion-msg { border-bottom: 1px solid var(--border); padding: 8px 0; }
 .file-folder-body .discussion-msg:last-child { border-bottom: none; }
