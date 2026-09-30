@@ -22,6 +22,7 @@ function num(v, fallback = 0) {
 
 // ---------- Batch Setup ----------
 function computeBatch(bs) {
+  bs = bs || {};
   const batches = num(bs.batches, 1);
   const samplesPerBatch = num(bs.samplesPerBatch);
   const calLevels = num(bs.calLevels);
@@ -204,24 +205,25 @@ function computeFreightTax(freightTax, subtotal, batches, totalStudySamplesAllBa
   };
 }
 
-// ---------- Full site computation ----------
+// ---------- Full site computation (chemistry/SOP-based calculator) ----------
 function computeAll(data) {
+  data = data || {};
   const batchCalc = computeBatch(data.batchSetup);
-  const gradientCalc = computeGradient(data.lcGradient);
-  const calPrepCalc = computeCalibratorPrep(data.calibratorPrep, data.batchSetup.batches);
-  const reagentsCalc = computeReagents(data.reagents, batchCalc, data.batchSetup.batches);
-  const columnCalc = computeColumn(data.column, batchCalc);
-  const solventsCalc = computeSolvents(data.solvents, gradientCalc, batchCalc, calPrepCalc, data.batchSetup.batches);
+  const gradientCalc = computeGradient(data.lcGradient || []);
+  const calPrepCalc = computeCalibratorPrep(data.calibratorPrep || {}, data.batchSetup && data.batchSetup.batches);
+  const reagentsCalc = computeReagents(data.reagents || {}, batchCalc, data.batchSetup && data.batchSetup.batches);
+  const columnCalc = computeColumn(data.column || {}, batchCalc);
+  const solventsCalc = computeSolvents(data.solvents || {}, gradientCalc, batchCalc, calPrepCalc, data.batchSetup && data.batchSetup.batches);
   const consumablesCalc = computeConsumables(data.consumables);
 
   const grandTotal = reagentsCalc.totalCost + calPrepCalc.calPrepTotalCost + columnCalc.totalCost
     + solventsCalc.totalCost + consumablesCalc.totalCost;
-  const costPerBatch = safeDiv(grandTotal, data.batchSetup.batches);
+  const costPerBatch = safeDiv(grandTotal, num(data.batchSetup && data.batchSetup.batches, 1));
   const costPerStudySample = safeDiv(grandTotal, batchCalc.totalStudySamplesAllBatches);
 
   const freightTaxCalc = computeFreightTax(
     data.freightTax || { freightItems: [], taxRate: 0, applyTaxToFreight: true },
-    grandTotal, data.batchSetup.batches, batchCalc.totalStudySamplesAllBatches
+    grandTotal, data.batchSetup && data.batchSetup.batches, batchCalc.totalStudySamplesAllBatches
   );
 
   return {
@@ -237,4 +239,105 @@ function computeAll(data) {
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { computeAll, computeBatch, computeGradient, computeCalibratorPrep, computeReagents, computeColumn, computeSolvents, computeConsumables, computeFreightTax };
+// ---------- Kit-based calculator (Calculator 2 type) ----------
+// Fixed pack counts bundled inside ONE complete kit, per the vendor's kit
+// contents list (e.g. ClinMass "Complete Kit for Amino Acids in Plasma",
+// MS14000) — used only while at least one complete kit is purchased.
+const KIT_INCLUDED_PACKS = {
+  washSolution: 1,
+  mobilePhaseA: 2,
+  mobilePhaseB: 2,
+  precipitantP: 2,
+};
+const KIT_DEFAULT_ASSAYS_PER_KIT = 200;
+
+// One LC-side consumable's sufficiency check: how much is required (volume
+// per sample x total samples) vs. how much is actually on hand (packs
+// bundled in the purchased kits, plus any extra packs bought separately).
+function computeKitLcLine(cfg, packsIncludedPerKit, kitsQty, totalSamples) {
+  cfg = cfg || {};
+  const packSizeML = num(cfg.packSizeML);
+  const extraPacksPurchased = num(cfg.extraPacksPurchased);
+  const costPerPack = num(cfg.costPerPack);
+  const volPerSampleML = num(cfg.volPerSampleML);
+  const packsFromKits = packsIncludedPerKit * num(kitsQty);
+  const totalPacks = packsFromKits + extraPacksPurchased;
+  const totalAvailableML = totalPacks * packSizeML;
+  const totalRequiredML = volPerSampleML * num(totalSamples);
+  const surplusML = totalAvailableML - totalRequiredML;
+  const extraCost = extraPacksPurchased * costPerPack;
+  return {
+    packSizeML, volPerSampleML, packsFromKits, extraPacksPurchased, totalPacks,
+    totalAvailableML, totalRequiredML, surplusML, sufficient: surplusML >= 0, extraCost,
+  };
+}
+
+function computeKit(kit, totalSamples) {
+  kit = kit || {};
+  const completeKits = kit.completeKits || {};
+  const kitsQty = num(completeKits.qty);
+  const costPerKit = num(completeKits.costPerKit);
+  const assaysPerKit = num(completeKits.assaysPerKit, KIT_DEFAULT_ASSAYS_PER_KIT);
+  const kitCost = kitsQty * costPerKit;
+  const assaysCovered = kitsQty * assaysPerKit;
+
+  const lc = kit.lcConsumables || {};
+  const mobilePhaseA = computeKitLcLine(lc.mobilePhaseA, KIT_INCLUDED_PACKS.mobilePhaseA, kitsQty, totalSamples);
+  const mobilePhaseB = computeKitLcLine(lc.mobilePhaseB, KIT_INCLUDED_PACKS.mobilePhaseB, kitsQty, totalSamples);
+  const washSolution = computeKitLcLine(lc.washSolution, KIT_INCLUDED_PACKS.washSolution, kitsQty, totalSamples);
+  const precipitantP = computeKitLcLine(lc.precipitantP, KIT_INCLUDED_PACKS.precipitantP, kitsQty, totalSamples);
+  const lcExtraCost = mobilePhaseA.extraCost + mobilePhaseB.extraCost + washSolution.extraCost + precipitantP.extraCost;
+  const lcAllSufficient = mobilePhaseA.sufficient && mobilePhaseB.sufficient && washSolution.sufficient && precipitantP.sufficient;
+
+  const additionalItems = ((kit.additionalItems) || []).map((it) => ({
+    ...it, totalCost: num(it && it.qty) * num(it && it.costPerUnit),
+  }));
+  const additionalItemsTotal = additionalItems.reduce((sum, it) => sum + it.totalCost, 0);
+
+  const totalCost = kitCost + lcExtraCost + additionalItemsTotal;
+
+  return {
+    kitsQty, costPerKit, assaysPerKit, kitCost, assaysCovered,
+    mobilePhaseA, mobilePhaseB, washSolution, precipitantP, lcExtraCost, lcAllSufficient,
+    additionalItems, additionalItemsTotal, totalCost,
+  };
+}
+
+function computeKitAll(data) {
+  data = data || {};
+  const batchCalc = computeBatch(data.batchSetup);
+  const kitCalc = computeKit(data.kit, batchCalc.totalSamplesRunAllBatches);
+  const consumablesCalc = computeConsumables(data.consumables);
+
+  const grandTotal = kitCalc.totalCost + consumablesCalc.totalCost;
+  const costPerBatch = safeDiv(grandTotal, num(data.batchSetup && data.batchSetup.batches, 1));
+  const costPerStudySample = safeDiv(grandTotal, batchCalc.totalStudySamplesAllBatches);
+
+  const freightTaxCalc = computeFreightTax(
+    data.freightTax || { freightItems: [], taxRate: 0, applyTaxToFreight: true },
+    grandTotal, data.batchSetup && data.batchSetup.batches, batchCalc.totalStudySamplesAllBatches
+  );
+
+  const assaysRequired = batchCalc.totalSamplesRunAllBatches;
+  const assaysSurplus = kitCalc.assaysCovered - assaysRequired;
+
+  return {
+    batchCalc, kitCalc, consumablesCalc, freightTaxCalc,
+    summary: {
+      kitTotal: kitCalc.kitCost,
+      lcExtraTotal: kitCalc.lcExtraCost,
+      additionalItemsTotal: kitCalc.additionalItemsTotal,
+      consumablesTotal: consumablesCalc.totalCost,
+      grandTotal, costPerBatch, costPerStudySample,
+      assaysRequired, assaysCovered: kitCalc.assaysCovered, assaysSurplus,
+      assaysSufficient: assaysSurplus >= 0, lcAllSufficient: kitCalc.lcAllSufficient,
+    },
+  };
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    computeAll, computeBatch, computeGradient, computeCalibratorPrep, computeReagents, computeColumn,
+    computeSolvents, computeConsumables, computeFreightTax, computeKitAll, computeKit,
+  };
+}

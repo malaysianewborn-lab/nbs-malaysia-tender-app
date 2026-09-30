@@ -76,79 +76,140 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+// A site can hold more than one calculator, each with its own layout.
+// "chemistry" is the original SOP-based (gradient/reagent/solvent) build-up.
+// "kit" is a commercial-kit-based build-up (buy a complete kit and/or pick
+// individual components, check that included solvent volumes cover the
+// planned sample count). Currency, tender spec, supporting info, and
+// discussion are site-wide and are NOT part of either calculator.
+const CALCULATOR_FIELD_KEYS_BY_TYPE = {
+  chemistry: ['batchSetup', 'lcGradient', 'calibratorPrep', 'reagents', 'column', 'solvents', 'consumables', 'freightTax'],
+  kit: ['batchSetup', 'kit', 'consumables', 'freightTax'],
+};
+function calculatorType(data, id) {
+  return (data.calculators && data.calculators[id] && data.calculators[id].type) || 'chemistry';
+}
+function activeCalculatorType(data) {
+  return calculatorType(data, (data && data.activeCalculatorId) || 'calc1');
+}
+
+// The starting field values for a brand-new/never-used calculator slot.
+function defaultCalculatorFields(type) {
+  if (type === 'kit') {
+    return {
+      batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 6, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
+      // Defaults below are read straight off the ClinMass "Complete Kit for
+      // Amino Acids in Plasma" (MS14000) price/contents sheet.
+      kit: {
+        completeKits: { qty: 0, costPerKit: 0, assaysPerKit: 200 },
+        lcConsumables: {
+          mobilePhaseA: { code: 'MS14008', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          mobilePhaseB: { code: 'MS14009', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          washSolution: { code: 'MS14005', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          precipitantP: { code: 'MS14021', packSizeML: 20, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+        },
+        additionalItems: [
+          { code: 'MS14012', name: 'Internal Standard IS, lyophil.', unit: '5 ml', qty: 0, costPerUnit: 0 },
+          { code: 'MS14013', name: 'Plasma Calibrator Set, lyophil. (Level 0–5)', unit: '6 x 1 x 1 ml', qty: 0, costPerUnit: 0 },
+          { code: 'MS14014', name: 'Optimisation Mix, lyophil.', unit: '6 x 1 x 1 ml', qty: 0, costPerUnit: 0 },
+          { code: 'MS14020', name: 'Sample Preparation Vials', unit: '100 pcs', qty: 0, costPerUnit: 0 },
+          { code: 'MS14030', name: 'Analytical Column with test chromatogram', unit: '1 pce', qty: 0, costPerUnit: 0 },
+          { code: 'MS14082', name: 'Plasma Control, lyophil. (ClinChek, Level I & II)', unit: '2 x 5 x 1 ml', qty: 0, costPerUnit: 0 },
+        ],
+      },
+      consumables: {
+        items: [
+          { name: 'Pipette tips', unit: 'box', qty: 10, costPerUnit: 15 },
+          { name: 'Sample collection tubes', unit: 'each', qty: 300, costPerUnit: 0.5 },
+          { name: 'Gloves', unit: 'box', qty: 5, costPerUnit: 12 },
+        ],
+      },
+      freightTax: { freightItems: [], taxRate: 0.06, applyTaxToFreight: true },
+    };
+  }
+  return {
+    batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 8, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
+    lcGradient: [
+      { no: 1, time: 0.00, flow: 0.600, a: 90, b: 10, shape: 'Initial' },
+      { no: 2, time: 1.00, flow: 0.600, a: 80, b: 20, shape: 'Linear' },
+      { no: 3, time: 3.00, flow: 0.600, a: 75, b: 25, shape: 'Linear' },
+      { no: 4, time: 5.00, flow: 0.600, a: 65, b: 35, shape: 'Linear' },
+      { no: 5, time: 6.00, flow: 0.600, a: 55, b: 45, shape: 'Linear' },
+      { no: 6, time: 7.00, flow: 0.600, a: 30, b: 70, shape: 'Linear' },
+      { no: 7, time: 7.10, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
+      { no: 8, time: 8.00, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
+      { no: 9, time: 8.01, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
+      { no: 10, time: 10.00, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
+    ],
+    calibratorPrep: {
+      stockDilution: [
+        { level: 'S1 (neat stock)', conc: 500, vol: null, meoh: null },
+        { level: 'S2', conc: 400, vol: 160, meoh: 40 },
+        { level: 'S3', conc: 200, vol: 100, meoh: 100 },
+        { level: 'S4', conc: 100, vol: 100, meoh: 100 },
+        { level: 'S5', conc: 50, vol: 100, meoh: 100 },
+        { level: 'S6', conc: 25, vol: 100, meoh: 100 },
+        { level: 'S7', conc: 12.5, vol: 100, meoh: 100 },
+        { level: 'S8', conc: 6.25, vol: 100, meoh: 100 },
+      ],
+      workingPrep: [
+        { level: 'P1', source: 'S1 (neat stock)', vol: 15, isVol: 100 },
+        { level: 'P2', source: 'S2', vol: 15, isVol: 100 },
+        { level: 'P3', source: 'S3', vol: 15, isVol: 100 },
+        { level: 'P4', source: 'S4', vol: 15, isVol: 100 },
+        { level: 'P5', source: 'S5', vol: 15, isVol: 100 },
+        { level: 'P6', source: 'S6', vol: 15, isVol: 100 },
+        { level: 'P7', source: 'S7', vol: 15, isVol: 100 },
+        { level: 'P8', source: 'S8', vol: 15, isVol: 100 },
+      ],
+      qcPrep: [
+        { level: 'QC1', vol: 15, isVol: 100 },
+        { level: 'QC2', vol: 15, isVol: 100 },
+      ],
+      standard: { vialSize: 1000, dead: 50, costPerVial: 400 },
+    },
+    reagents: {
+      is: { volPerUse: 100, vialSize: 1500, dead: 100, costPerVial: 350 },
+      qc: { volPerUse: 15, vialSize: 500, dead: 50, costPerVial: 220 },
+    },
+    column: {
+      analytical: { label: 'Analytical column', cost: 650, lifetime: 500 },
+      guard: { label: 'Guard column', cost: 120, lifetime: 100 },
+    },
+    solvents: {
+      pfheptaConc: 0.001,
+      water: { bottleSize: 4000, dead: 30, costPerBottle: 10 },
+      acn: { bottleSize: 4000, dead: 30, costPerBottle: 55 },
+      pfhepta: { bottleSize: 100, dead: 3, costPerBottle: 180 },
+      calibratorMethanol: { bottleSize: 4000, dead: 30, costPerBottle: 45 },
+      generalSolvents: [
+        { name: 'Methanol (flush solvent / needle wash, general use)', qty: 6, costPerUnit: 45 },
+        { name: 'Isopropanol (IPA, general instrument maintenance)', qty: 4, costPerUnit: 40 },
+      ],
+    },
+    consumables: {
+      items: [
+        { name: 'Pipette tips', unit: 'box', qty: 10, costPerUnit: 15 },
+        { name: 'Sample collection tubes', unit: 'each', qty: 300, costPerUnit: 0.5 },
+        { name: 'Gloves', unit: 'box', qty: 5, costPerUnit: 12 },
+      ],
+    },
+    freightTax: {
+      freightItems: [],
+      taxRate: 0.06,
+      applyTaxToFreight: true,
+    },
+  };
+}
+
 const DEFAULT_SITE_DATA = {
   currency: { code: 'MYR', symbol: 'RM' },
-  batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 8, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
-  lcGradient: [
-    { no: 1, time: 0.00, flow: 0.600, a: 90, b: 10, shape: 'Initial' },
-    { no: 2, time: 1.00, flow: 0.600, a: 80, b: 20, shape: 'Linear' },
-    { no: 3, time: 3.00, flow: 0.600, a: 75, b: 25, shape: 'Linear' },
-    { no: 4, time: 5.00, flow: 0.600, a: 65, b: 35, shape: 'Linear' },
-    { no: 5, time: 6.00, flow: 0.600, a: 55, b: 45, shape: 'Linear' },
-    { no: 6, time: 7.00, flow: 0.600, a: 30, b: 70, shape: 'Linear' },
-    { no: 7, time: 7.10, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
-    { no: 8, time: 8.00, flow: 0.600, a: 5, b: 95, shape: 'Linear' },
-    { no: 9, time: 8.01, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
-    { no: 10, time: 10.00, flow: 0.600, a: 90, b: 10, shape: 'Linear' },
-  ],
-  calibratorPrep: {
-    stockDilution: [
-      { level: 'S1 (neat stock)', conc: 500, vol: null, meoh: null },
-      { level: 'S2', conc: 400, vol: 160, meoh: 40 },
-      { level: 'S3', conc: 200, vol: 100, meoh: 100 },
-      { level: 'S4', conc: 100, vol: 100, meoh: 100 },
-      { level: 'S5', conc: 50, vol: 100, meoh: 100 },
-      { level: 'S6', conc: 25, vol: 100, meoh: 100 },
-      { level: 'S7', conc: 12.5, vol: 100, meoh: 100 },
-      { level: 'S8', conc: 6.25, vol: 100, meoh: 100 },
-    ],
-    workingPrep: [
-      { level: 'P1', source: 'S1 (neat stock)', vol: 15, isVol: 100 },
-      { level: 'P2', source: 'S2', vol: 15, isVol: 100 },
-      { level: 'P3', source: 'S3', vol: 15, isVol: 100 },
-      { level: 'P4', source: 'S4', vol: 15, isVol: 100 },
-      { level: 'P5', source: 'S5', vol: 15, isVol: 100 },
-      { level: 'P6', source: 'S6', vol: 15, isVol: 100 },
-      { level: 'P7', source: 'S7', vol: 15, isVol: 100 },
-      { level: 'P8', source: 'S8', vol: 15, isVol: 100 },
-    ],
-    qcPrep: [
-      { level: 'QC1', vol: 15, isVol: 100 },
-      { level: 'QC2', vol: 15, isVol: 100 },
-    ],
-    standard: { vialSize: 1000, dead: 50, costPerVial: 400 },
+  ...defaultCalculatorFields('chemistry'), // root-level calculator fields = whichever calculator is currently active
+  calculators: {
+    calc1: { name: 'Calculator 1', type: 'chemistry' },
+    calc2: { name: 'Calculator 2', type: 'kit' },
   },
-  reagents: {
-    is: { volPerUse: 100, vialSize: 1500, dead: 100, costPerVial: 350 },
-    qc: { volPerUse: 15, vialSize: 500, dead: 50, costPerVial: 220 },
-  },
-  column: {
-    analytical: { label: 'Analytical column', cost: 650, lifetime: 500 },
-    guard: { label: 'Guard column', cost: 120, lifetime: 100 },
-  },
-  solvents: {
-    pfheptaConc: 0.001,
-    water: { bottleSize: 4000, dead: 30, costPerBottle: 10 },
-    acn: { bottleSize: 4000, dead: 30, costPerBottle: 55 },
-    pfhepta: { bottleSize: 100, dead: 3, costPerBottle: 180 },
-    calibratorMethanol: { bottleSize: 4000, dead: 30, costPerBottle: 45 },
-    generalSolvents: [
-      { name: 'Methanol (flush solvent / needle wash, general use)', qty: 6, costPerUnit: 45 },
-      { name: 'Isopropanol (IPA, general instrument maintenance)', qty: 4, costPerUnit: 40 },
-    ],
-  },
-  consumables: {
-    items: [
-      { name: 'Pipette tips', unit: 'box', qty: 10, costPerUnit: 15 },
-      { name: 'Sample collection tubes', unit: 'each', qty: 300, costPerUnit: 0.5 },
-      { name: 'Gloves', unit: 'box', qty: 5, costPerUnit: 12 },
-    ],
-  },
-  freightTax: {
-    freightItems: [],
-    taxRate: 0.06,
-    applyTaxToFreight: true,
-  },
+  activeCalculatorId: 'calc1',
   tenderSpec: {
     notes: '',
     links: [],
@@ -158,6 +219,35 @@ const DEFAULT_SITE_DATA = {
     notes: '',
   },
 };
+
+// Snapshot the current working calculator fields into the outgoing
+// calculator's storage, then load (or freshly initialize) the target
+// calculator's fields into the working root — every render function, the
+// calc engine, and the report export all keep reading the same root-level
+// paths (data.batchSetup, etc.) regardless of which calculator is active.
+// batchSetup is shared conceptually across both types (it's just "how many
+// batches/samples/cal/QC am I running"), so it carries over rather than
+// resetting when you switch calculator type.
+function switchCalculator(targetId) {
+  const data = state.site.data;
+  data.calculators = data.calculators || { calc1: { name: 'Calculator 1', type: 'chemistry' }, calc2: { name: 'Calculator 2', type: 'kit' } };
+  const currentId = data.activeCalculatorId || 'calc1';
+  if (targetId === currentId) return;
+  const currentType = calculatorType(data, currentId);
+  const targetType = calculatorType(data, targetId);
+
+  data.calculators[currentId] = data.calculators[currentId] || { name: currentId === 'calc1' ? 'Calculator 1' : 'Calculator 2', type: currentType };
+  const outgoing = {};
+  CALCULATOR_FIELD_KEYS_BY_TYPE[currentType].forEach((k) => { outgoing[k] = data[k]; });
+  data.calculators[currentId].data = outgoing;
+
+  data.calculators[targetId] = data.calculators[targetId] || { name: targetId === 'calc1' ? 'Calculator 1' : 'Calculator 2', type: targetType };
+  const savedBatchSetup = outgoing.batchSetup; // carry batch design across even into a never-used target calculator
+  const incoming = data.calculators[targetId].data || defaultCalculatorFields(targetType);
+  CALCULATOR_FIELD_KEYS_BY_TYPE[targetType].forEach((k) => { data[k] = incoming[k]; });
+  if (!data.calculators[targetId].data && savedBatchSetup) data.batchSetup = savedBatchSetup;
+  data.activeCalculatorId = targetId;
+}
 
 // ---------- Auth ----------
 async function checkSession() {
@@ -209,6 +299,12 @@ async function loadSite(id) {
   document.getElementById('site-select').value = id;
   state.site = await api(`/api/sites/${id}`);
   state.site.data.currency = state.site.data.currency || { code: 'USD', symbol: '$' };
+  // Backfill for sites saved before multi-calculator support existed — their
+  // existing root-level batchSetup/lcGradient/etc. become Calculator 1 as-is.
+  if (!state.site.data.calculators) {
+    state.site.data.calculators = { calc1: { name: 'Calculator 1', type: 'chemistry' }, calc2: { name: 'Calculator 2', type: 'kit' } };
+    state.site.data.activeCalculatorId = 'calc1';
+  }
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -287,13 +383,23 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#export-panel') || e.target.closest('#export-btn')) return;
   panel.hidden = true;
 });
+// Excel/PDF export only supports the original SOP-based calculator so far.
+function warnIfKitExportUnsupported() {
+  if (state.site && activeCalculatorType(state.site.data) === 'kit') {
+    alert('Excel/PDF export isn’t available yet for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export a report.');
+    return true;
+  }
+  return false;
+}
 on('export-excel-btn', 'click', () => {
   if (!state.siteId) return;
+  if (warnIfKitExportUnsupported()) return;
   window.location.href = `/api/sites/${state.siteId}/export/excel`;
   document.getElementById('export-panel').hidden = true;
 });
 on('export-pdf-btn', 'click', () => {
   if (!state.siteId) return;
+  if (warnIfKitExportUnsupported()) return;
   window.location.href = `/api/sites/${state.siteId}/export/pdf`;
   document.getElementById('export-panel').hidden = true;
 });
@@ -388,8 +494,9 @@ function renderActiveTab() {
   renderers[state.activeTab](container, state.site.data);
 }
 
-// The Calculator tab has its own sub-navigation across all 8 cost sections.
-const CALC_SECTIONS = [
+// The Calculator tab's sub-navigation depends on which calculator type is
+// active: the original chemistry/SOP-based build-up, or the kit-based one.
+const CALC_SECTIONS_CHEMISTRY = [
   { key: 'batchSetup', label: 'Batch Setup', render: renderBatchSetup },
   { key: 'lcGradient', label: 'LC Gradient', render: renderGradient },
   { key: 'calibratorPrep', label: 'Calibrator & QC Prep', render: renderCalibratorPrep },
@@ -400,10 +507,22 @@ const CALC_SECTIONS = [
   { key: 'summary', label: 'Summary', render: renderSummary },
   { key: 'freightTax', label: 'Freight & Tax', render: renderFreightTax },
 ];
+const CALC_SECTIONS_KIT = [
+  { key: 'batchSetup', label: 'Batch Setup', render: renderBatchSetup },
+  { key: 'kit', label: 'Kit & Components', render: renderKitSection },
+  { key: 'consumables', label: 'Consumables', render: renderConsumables },
+  { key: 'summary', label: 'Summary', render: renderKitSummary },
+  { key: 'freightTax', label: 'Freight & Tax', render: renderFreightTax },
+];
+function currentCalcSections(data) {
+  return activeCalculatorType(data) === 'kit' ? CALC_SECTIONS_KIT : CALC_SECTIONS_CHEMISTRY;
+}
 function renderCalculator(container, data) {
+  const sections = currentCalcSections(data);
+  if (!sections.some((s) => s.key === state.activeCalcSection)) state.activeCalcSection = sections[0].key;
   container.innerHTML = `
     <nav class="subtabs" id="calc-subtabs">
-      ${CALC_SECTIONS.map((s) => `<button type="button" data-calcsection="${s.key}" class="subtab-btn ${state.activeCalcSection === s.key ? 'active' : ''}">${s.label}</button>`).join('')}
+      ${sections.map((s) => `<button type="button" data-calcsection="${s.key}" class="subtab-btn ${state.activeCalcSection === s.key ? 'active' : ''}">${s.label}</button>`).join('')}
     </nav>
     <div id="calc-section-content"></div>`;
   renderCalcSection(data);
@@ -411,7 +530,8 @@ function renderCalculator(container, data) {
 function renderCalcSection(data) {
   const sectionContainer = document.getElementById('calc-section-content');
   if (!sectionContainer) return;
-  const section = CALC_SECTIONS.find((s) => s.key === state.activeCalcSection) || CALC_SECTIONS[0];
+  const sections = currentCalcSections(data);
+  const section = sections.find((s) => s.key === state.activeCalcSection) || sections[0];
   section.render(sectionContainer, data);
   refreshComputed();
 }
@@ -513,10 +633,37 @@ on('tab-content', 'click', (e) => {
     scheduleSave();
     return;
   }
+  const switchCalc = e.target.closest('[data-switch-calculator]');
+  if (switchCalc) {
+    switchCalculator(switchCalc.dataset.switchCalculator);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const addKitItem = e.target.closest('#add-kit-item-btn');
+  if (addKitItem) {
+    state.site.data.kit = state.site.data.kit || {};
+    state.site.data.kit.additionalItems = state.site.data.kit.additionalItems || [];
+    state.site.data.kit.additionalItems.push({ code: '', name: '', unit: '', qty: 0, costPerUnit: 0 });
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
+  const removeKitItem = e.target.closest('[data-remove-kit-item]');
+  if (removeKitItem) {
+    const i = parseInt(removeKitItem.dataset.removeKitItem, 10);
+    state.site.data.kit.additionalItems.splice(i, 1);
+    renderActiveTab();
+    scheduleSave();
+    return;
+  }
 });
 
+function computeActive(data) {
+  return activeCalculatorType(data) === 'kit' ? computeKitAll(data) : computeAll(data);
+}
 function refreshComputed() {
-  const computed = computeAll(state.site.data);
+  const computed = computeActive(state.site.data);
   document.querySelectorAll('[data-out]').forEach((el) => {
     const val = el.dataset.out === '__batches' ? state.site.data.batchSetup.batches : getPath(computed, el.dataset.out);
     el.textContent = fmt(val, el.dataset.fmt);
@@ -529,7 +676,14 @@ function refreshComputed() {
     wellsCell.style.color = negative ? '#9c0006' : '';
     wellsCell.style.fontWeight = negative ? 'bold' : '';
   }
-  renderSummaryChartIfActive(computed);
+  // data-badge="<path to a boolean in computed>" -> renders a green "Sufficient" /
+  // red "Shortfall" pill (used by the kit calculator's sufficiency checks).
+  document.querySelectorAll('[data-badge]').forEach((el) => {
+    const ok = !!getPath(computed, el.dataset.badge);
+    el.textContent = ok ? 'Sufficient' : 'Shortfall';
+    el.className = `sufficiency-badge ${ok ? 'ok' : 'bad'}`;
+  });
+  if (activeCalculatorType(state.site.data) !== 'kit') renderSummaryChartIfActive(computed);
   return computed;
 }
 
@@ -904,9 +1058,34 @@ function renderSolvents(container, data) {
 }
 
 // ---------- Summary ----------
+// Shown at the top of every "Summary" section \u2014 lets the person name each
+// calculator and pick which one is currently active for this site.
+function renderCalculatorSwitcherHtml(data) {
+  const activeId = data.activeCalculatorId || 'calc1';
+  const ids = ['calc1', 'calc2'];
+  return `
+    <div class="card calculator-switcher">
+      <h2>Calculator</h2>
+      <div class="calc-switch-rows">
+        ${ids.map((id) => {
+          const calc = (data.calculators && data.calculators[id]) || { name: id === 'calc1' ? 'Calculator 1' : 'Calculator 2' };
+          const isActive = id === activeId;
+          const typeLabel = calculatorType(data, id) === 'kit' ? 'Kit-based' : 'SOP-based';
+          return `
+          <div class="calc-switch-row ${isActive ? 'active' : ''}">
+            <input type="text" data-path="calculators.${id}.name" value="${escapeHtml(calc.name || '')}" placeholder="${id === 'calc1' ? 'Calculator 1' : 'Calculator 2'}" />
+            <span class="calc-switch-type">${typeLabel}</span>
+            <button type="button" class="btn-add-row" data-switch-calculator="${id}" ${isActive ? 'disabled' : ''}>${isActive ? '\u2713 Active' : 'Use this calculator'}</button>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
 let lastComputedForChart = null;
-function renderSummary(container) {
+function renderSummary(container, data) {
   container.innerHTML = `
+    ${renderCalculatorSwitcherHtml(data)}
     <div class="summary-grid">
       <div class="summary-box"><div class="label">Reagents (IS, QC)</div><div class="amount" data-out="summary.reagentsTotal" data-fmt="cur">\u2014</div></div>
       <div class="summary-box"><div class="label">Calibrator &amp; QC Prep</div><div class="amount" data-out="summary.calPrepTotal" data-fmt="cur">\u2014</div></div>
@@ -1002,6 +1181,117 @@ function renderFreightTax(container, data) {
       <div class="field-row"><label>Final cost per study sample ${curLabel()}</label>
         <span data-out="freightTaxCalc.finalCostPerSample" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">\u2014</span></div>
     </div>`;
+}
+
+// ---------- Kit & Components (Calculator 2 type) ----------
+function kitLcRow(label, fieldKey, unit, s, computedPrefix) {
+  const cfg = s[fieldKey] || {};
+  return `<tr>
+    <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}</div></td>
+    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.volPerSampleML" data-type="number" value="${cfg.volPerSampleML ?? 0}" /></td>
+    <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalRequiredML" data-fmt="num2">—</td>
+    <td class="linked" data-out="${computedPrefix}.${fieldKey}.packsFromKits" data-fmt="int">—</td>
+    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
+    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.packSizeML" data-type="number" value="${cfg.packSizeML ?? 0}" /></td>
+    <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalAvailableML" data-fmt="num2">—</td>
+    <td class="computed" data-out="${computedPrefix}.${fieldKey}.surplusML" data-fmt="num2" data-warn-negative="1">—</td>
+    <td><span class="sufficiency-badge" data-badge="kitCalc.${fieldKey}.sufficient">—</span></td>
+    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.costPerPack" data-type="number" value="${cfg.costPerPack ?? 0}" /></td>
+    <td class="computed" data-out="${computedPrefix}.${fieldKey}.extraCost" data-fmt="cur">—</td>
+  </tr>`;
+}
+
+function renderKitSection(container, data) {
+  data.kit = data.kit || {};
+  data.kit.completeKits = data.kit.completeKits || { qty: 0, costPerKit: 0, assaysPerKit: 200 };
+  data.kit.lcConsumables = data.kit.lcConsumables || {};
+  data.kit.additionalItems = data.kit.additionalItems || [];
+  const k = data.kit;
+  const items = k.additionalItems;
+  container.innerHTML = `
+    <div class="card">
+      <h2>Complete Kit(s)</h2>
+      ${inputRow('Complete kits purchased (qty)', 'kit.completeKits.qty', k.completeKits.qty, 'e.g. ClinMass MS14000, 1 kit = 200 assays')}
+      ${inputRow(`Cost per kit ${curLabel()}`, 'kit.completeKits.costPerKit', k.completeKits.costPerKit, '')}
+      ${inputRow('Assays covered per kit', 'kit.completeKits.assaysPerKit', k.completeKits.assaysPerKit, 'Change only if your kit’s assay count differs from 200')}
+      ${outRow('Complete kit(s) cost', 'kitCalc.kitCost', 'cur')}
+      ${outRow('Assays covered by kit(s)', 'kitCalc.assaysCovered', 'int')}
+      <p class="note">Leave quantity at 0 if you don’t plan to buy a complete kit and will build up cost from individual components below instead. Both can be used together — e.g. 1 complete kit plus extra Mobile Phase A bought separately.</p>
+    </div>
+
+    <div class="card">
+      <h2>LC Solvent Sufficiency <span style="font-weight:normal;font-size:12px;">(is what’s included/purchased enough for your batch design?)</span></h2>
+      <table class="calc-table">
+        <thead><tr>
+          <th>Component</th><th>Vol/sample (mL)</th><th>Total required (mL)</th><th>Packs from kit(s)</th>
+          <th>Extra packs bought</th><th>Pack size (mL)</th><th>Total available (mL)</th><th>Surplus/shortfall (mL)</th>
+          <th>Status</th><th>Cost/extra pack ${curLabel()}</th><th>Extra pack cost ${curLabel()}</th>
+        </tr></thead>
+        <tbody>
+          ${kitLcRow('Mobile Phase A', 'mobilePhaseA', 'mL', k.lcConsumables, 'kitCalc')}
+          ${kitLcRow('Mobile Phase B', 'mobilePhaseB', 'mL', k.lcConsumables, 'kitCalc')}
+          ${kitLcRow('Autosampler Washing Solution', 'washSolution', 'mL', k.lcConsumables, 'kitCalc')}
+          ${kitLcRow('Precipitant P', 'precipitantP', 'mL', k.lcConsumables, 'kitCalc')}
+          <tr class="total-row"><td colspan="9">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.lcExtraCost" data-fmt="cur">—</td></tr>
+        </tbody>
+      </table>
+      <p class="note">"Total required" = volume per sample &times; total samples run across all batches (from the Batch Setup tab). "Packs from kit(s)" comes from the vendor's kit contents (Mobile Phase A/B: 2 packs/kit, Wash Solution: 1 pack/kit, Precipitant P: 2 packs/kit) &times; complete kits purchased above. Add extra packs here if that's not enough.</p>
+    </div>
+
+    <div class="card">
+      <h2>Additional / Separately Purchased Items</h2>
+      <table class="calc-table">
+        <thead><tr><th>Code</th><th>Item</th><th>Pack/unit size</th><th>Quantity</th><th>Cost per unit ${curLabel()}</th><th>Total cost ${curLabel()}</th><th></th></tr></thead>
+        <tbody>
+          ${items.map((it, i) => `<tr>
+            <td><input type="text" data-path="kit.additionalItems.${i}.code" value="${escapeHtml(it.code || '')}" style="text-align:left;width:100%;" placeholder="e.g. MS14012" /></td>
+            <td class="label-cell"><input type="text" data-path="kit.additionalItems.${i}.name" value="${escapeHtml(it.name || '')}" style="text-align:left;width:100%;" placeholder="e.g. Internal Standard IS" /></td>
+            <td><input type="text" data-path="kit.additionalItems.${i}.unit" value="${escapeHtml(it.unit || '')}" style="text-align:center;width:100%;" placeholder="e.g. 5 ml" /></td>
+            <td><input type="number" step="any" data-path="kit.additionalItems.${i}.qty" data-type="number" value="${it.qty}" /></td>
+            <td><input type="number" step="any" data-path="kit.additionalItems.${i}.costPerUnit" data-type="number" value="${it.costPerUnit}" /></td>
+            <td class="computed" data-out="kitCalc.additionalItems.${i}.totalCost" data-fmt="cur">—</td>
+            <td><button type="button" class="btn-remove-row" data-remove-kit-item="${i}" title="Remove">✕</button></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <button type="button" id="add-kit-item-btn" class="btn-add-row">+ Add item</button>
+      <div class="field-row" style="margin-top:10px;"><label>Additional items subtotal</label>
+        <span data-out="kitCalc.additionalItemsTotal" data-fmt="cur" style="font-weight:600;min-width:100px;text-align:right;">—</span></div>
+      <p class="note">Pre-filled with the vendor's "Separately available components" list (Internal Standard, Calibrator Set, Optimisation Mix, Sample Prep Vials, Analytical Column, ClinChek Controls) — set quantity to 0 to skip an item, or add rows for anything else. Quantity is the number of packs/units, not the assay count.</p>
+    </div>`;
+}
+
+// ---------- Kit Calculator Summary ----------
+function renderKitSummary(container, data) {
+  container.innerHTML = `
+    ${renderCalculatorSwitcherHtml(data)}
+    <div class="summary-grid">
+      <div class="summary-box"><div class="label">Complete Kit(s)</div><div class="amount" data-out="summary.kitTotal" data-fmt="cur">—</div></div>
+      <div class="summary-box"><div class="label">Extra LC Packs</div><div class="amount" data-out="summary.lcExtraTotal" data-fmt="cur">—</div></div>
+      <div class="summary-box"><div class="label">Additional Items</div><div class="amount" data-out="summary.additionalItemsTotal" data-fmt="cur">—</div></div>
+      <div class="summary-box"><div class="label">Consumables</div><div class="amount" data-out="summary.consumablesTotal" data-fmt="cur">—</div></div>
+      <div class="summary-box grand"><div class="label">SUBTOTAL (before freight &amp; tax)</div><div class="amount" data-out="summary.grandTotal" data-fmt="cur">—</div></div>
+    </div>
+    <div class="card">
+      <h2>Is the kit enough?</h2>
+      <div class="field-row"><label>Assays required (all batches: study + cal + QC + blanks)</label>
+        <span data-out="summary.assaysRequired" data-fmt="int" style="font-weight:600;min-width:100px;text-align:right;">—</span></div>
+      <div class="field-row"><label>Assays covered by kit(s) purchased</label>
+        <span data-out="summary.assaysCovered" data-fmt="int" style="font-weight:600;min-width:100px;text-align:right;">—</span></div>
+      <div class="field-row"><label>Surplus / shortfall</label>
+        <span data-out="summary.assaysSurplus" data-fmt="int" data-warn-negative="1" style="font-weight:600;min-width:100px;text-align:right;">—</span>
+        <span class="sufficiency-badge" data-badge="summary.assaysSufficient">—</span></div>
+      <div class="field-row"><label>Mobile phases / wash solution / precipitant</label>
+        <span class="sufficiency-badge" data-badge="summary.lcAllSufficient">—</span>
+        <span class="hint">See the Kit &amp; Components tab for the per-component breakdown.</span></div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-box"><div class="label">Total batches</div><div class="amount" data-out="__batches" data-fmt="int">—</div></div>
+      <div class="summary-box"><div class="label">Total study samples (all batches)</div><div class="amount" data-out="batchCalc.totalStudySamplesAllBatches" data-fmt="int">—</div></div>
+      <div class="summary-box"><div class="label">Cost per batch</div><div class="amount" data-out="summary.costPerBatch" data-fmt="cur">—</div></div>
+      <div class="summary-box"><div class="label">Cost per study sample</div><div class="amount" data-out="summary.costPerStudySample" data-fmt="cur">—</div></div>
+    </div>
+    <p class="note" style="padding:0 4px;">See the Freight &amp; Tax tab for the final landed cost including shipping and tax.</p>`;
 }
 
 // ---------- Generic file upload/list/delete (shared by Tender Spec, Images, Supporting Info) ----------

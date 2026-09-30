@@ -149,6 +149,24 @@ table.calc-table .computed { color: #111; font-weight: 500; }
 table.calc-table .linked { color: var(--link-text); font-weight: 500; }
 table.calc-table tr.total-row td { background: var(--gray-bg); font-weight: bold; }
 table.calc-table .na { color: #aaa; }
+table.calc-table .warn { background: #ffc7ce; color: #9c0006; font-weight: bold; }
+
+/* ---------- Calculator switcher (top of Summary) ---------- */
+.calc-switch-rows { display: flex; flex-direction: column; gap: 10px; }
+.calc-switch-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--gray-bg);
+}
+.calc-switch-row.active { background: var(--pale-blue); border-color: var(--navy-light); }
+.calc-switch-row input[type="text"] { flex: 1 1 220px; }
+.calc-switch-type { font-size: 11px; color: #667; background: white; border-radius: 10px; padding: 2px 10px; white-space: nowrap; }
+.calc-switch-row button { white-space: nowrap; }
+.calc-switch-row button:disabled { opacity: 0.7; cursor: default; }
+
+/* ---------- Sufficiency badge (kit calculator) ---------- */
+.sufficiency-badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+.sufficiency-badge.ok { background: #d7f2df; color: #14632f; }
+.sufficiency-badge.bad { background: #ffc7ce; color: #9c0006; }
 
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px; }
 .summary-box { background: white; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); text-align: center; }

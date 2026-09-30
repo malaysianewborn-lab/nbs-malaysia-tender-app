@@ -399,10 +399,22 @@ app.delete('/api/sites/:siteId/versions/:versionId', requireAuth, asyncHandler(a
   res.json({ ok: true });
 }));
 
+// Excel/PDF report generation only understands the original chemistry/SOP-
+// based calculator's data shape. A site whose active calculator is the
+// kit-based one (Calculator 2) is reported clearly rather than silently
+// producing a wrong or empty report.
+function activeCalcType(data) {
+  const id = (data && data.activeCalculatorId) || 'calc1';
+  return (data && data.calculators && data.calculators[id] && data.calculators[id].type) || 'chemistry';
+}
+
 // ---------- Report export (Excel & PDF) ----------
 app.get('/api/sites/:id/export/excel', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
+  if (activeCalcType(site.data) === 'kit') {
+    return res.status(400).json({ error: 'Excel export is not yet available for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export, or ask for kit-report support to be added.' });
+  }
   const computed = computeAll(site.data);
   const buffer = await buildExcelReport(site, computed);
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -413,6 +425,9 @@ app.get('/api/sites/:id/export/excel', requireAuth, asyncHandler(async (req, res
 app.get('/api/sites/:id/export/pdf', requireAuth, asyncHandler(async (req, res) => {
   const { data: site, error } = await withRetry(() => supabase.from('sites').select('*').eq('id', req.params.id).single());
   if (error || !site) return res.status(404).json({ error: 'Site not found' });
+  if (activeCalcType(site.data) === 'kit') {
+    return res.status(400).json({ error: 'PDF export is not yet available for the kit-based calculator (Calculator 2). Switch to the SOP-based calculator to export, or ask for kit-report support to be added.' });
+  }
   const computed = computeAll(site.data);
   res.set('Content-Type', 'application/pdf');
   res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(site.name)}-tender-report.pdf"`);
