@@ -429,57 +429,75 @@ function calculatorSnapshot(data, calcId) {
   out.currency = data.currency;
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
-  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out); ensureKitLevelDefaults(out); }
+  if (type === 'kit') {
+    migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out);
+    migrateKitControlSet(out); ensureKitLevelDefaults(out);
+  }
   return { type, name: calculatorNameOf(data, calcId), data: out };
 }
 
 // Mirrors public/app.js's migrateKitCalibratorLevels(): sites saved before
 // the Calibrator Set was split into per-level rows had one lumped
-// "calibratorSet" reagent line and no control/QC tracking. The old numbers
-// carry forward into Calibrator L0 (the safest non-destructive landing
-// spot); every other level starts blank and is filled in by
-// ensureKitLevelDefaults() below. Exports read straight from the database,
-// not the browser's in-memory migrated state, so this recovery runs here too.
+// "calibratorSet" reagent line. The old numbers carry forward into
+// Calibrator L0 (the safest non-destructive landing spot); every other
+// level starts blank and is filled in by ensureKitLevelDefaults() below.
+// Exports read straight from the database, not the browser's in-memory
+// migrated state, so this recovery runs here too.
 function migrateKitCalibratorLevels(calcData) {
   if (!calcData || !calcData.kit || !calcData.kit.reagents || calcData.kit.reagents.calibrators) return;
   const legacy = calcData.kit.reagents.calibratorSet;
   calcData.kit.reagents.calibrators = legacy ? { l0: { ...legacy, code: undefined } } : {};
-  calcData.kit.reagents.controls = {};
   delete calcData.kit.reagents.calibratorSet;
 }
 
-// Mirrors public/app.js's ensureKitLevelDefaults(): Batch Setup's
-// calLevels/qcLevels fields are the single source of truth for how many
-// calibrator/control levels there are. Backfills a blank starting config
-// (packsPerKit 0 — never assume packs that were never confirmed) for any
-// level implied by the current count that doesn't have one yet. Exports
-// read straight from the database, not the browser's in-memory state, so
-// this runs here too — otherwise an unedited/legacy site would export with
-// missing rows instead of the correct blank ones.
+// Mirrors public/app.js's migrateKitControlSet(): a short-lived earlier
+// version tracked controls/QCs as separate per-level rows (controls.l0,
+// controls.l1, ...), same as calibrators. Real QC material is normally sold
+// as ONE bundled pack covering every level though, so that per-level layout
+// just meant the same purchase entered on every row. This collapses it back
+// into a single controlSet line, taking the FIRST level's numbers as
+// canonical (summing the level rows would double-count one real purchase).
+// Exports read straight from the database, not the browser's in-memory
+// state, so this recovery runs here too.
+function migrateKitControlSet(calcData) {
+  if (!calcData || !calcData.kit || !calcData.kit.reagents || calcData.kit.reagents.controlSet) return;
+  const legacyLevels = calcData.kit.reagents.controls;
+  const firstKey = legacyLevels && Object.keys(legacyLevels)[0];
+  calcData.kit.reagents.controlSet = firstKey ? { ...legacyLevels[firstKey] } : undefined;
+  delete calcData.kit.reagents.controls;
+}
+
+// Mirrors public/app.js's ensureKitLevelDefaults(): Batch Setup's calLevels
+// field is the single source of truth for how many calibrator levels there
+// are. Backfills a blank starting config (packsPerKit 0 — never assume
+// packs that were never confirmed) for any calibrator level implied by the
+// current count that doesn't have one yet, and backfills controlSet (a
+// single line, not per-level) if nothing set it. Exports read straight from
+// the database, not the browser's in-memory state, so this runs here too —
+// otherwise an unedited/legacy site would export with missing rows instead
+// of the correct blank ones.
 function ensureKitLevelDefaults(calcData) {
   if (!calcData || !calcData.kit) return;
   calcData.kit.reagents = calcData.kit.reagents || {};
   calcData.kit.reagents.calibrators = calcData.kit.reagents.calibrators || {};
-  calcData.kit.reagents.controls = calcData.kit.reagents.controls || {};
   const bs = calcData.batchSetup || {};
   const blankLevel = () => ({ packSizeUL: 1000, packsPerKit: 0, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 });
   kitLevelKeys(bs.calLevels).forEach((key) => {
     if (!calcData.kit.reagents.calibrators[key]) calcData.kit.reagents.calibrators[key] = blankLevel();
   });
-  kitLevelKeys(bs.qcLevels).forEach((key) => {
-    if (!calcData.kit.reagents.controls[key]) calcData.kit.reagents.controls[key] = blankLevel();
-  });
+  if (!calcData.kit.reagents.controlSet) calcData.kit.reagents.controlSet = blankLevel();
 }
 
 // Mirrors public/app.js's migrateKitReagents(): sites saved before the IS &
-// Calibrator Usage table existed had MS14012/MS14013 as flat "Additional
-// Items" lines. Exports read straight from the database, not the browser's
-// in-memory migrated state, so this recovery runs here too.
+// Calibrator Usage table existed had MS14012/MS14013/MS14082 as flat
+// "Additional Items" lines. Exports read straight from the database, not
+// the browser's in-memory migrated state, so this recovery runs here too.
 function migrateKitReagents(calcData) {
   if (!calcData || !calcData.kit || calcData.kit.reagents) return;
   calcData.kit.reagents = {
     is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
     calibratorSet: { code: 'MS14013', packSizeUL: 6000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
+    controlSet: { code: 'MS14082', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
   };
   const items = calcData.kit.additionalItems || [];
   const isItem = items.find((it) => it && it.code === 'MS14012');
@@ -492,7 +510,12 @@ function migrateKitReagents(calcData) {
     calcData.kit.reagents.calibratorSet.extraPacksPurchased = Number(calItem.qty) || 0;
     calcData.kit.reagents.calibratorSet.costPerPack = Number(calItem.costPerUnit) || 0;
   }
-  calcData.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013'));
+  const qcItem = items.find((it) => it && it.code === 'MS14082');
+  if (qcItem) {
+    calcData.kit.reagents.controlSet.extraPacksPurchased = Number(qcItem.qty) || 0;
+    calcData.kit.reagents.controlSet.costPerPack = Number(qcItem.costPerUnit) || 0;
+  }
+  calcData.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013' && it.code !== 'MS14082'));
 }
 
 // One-time migration, mirroring the same helper in public/app.js: covers

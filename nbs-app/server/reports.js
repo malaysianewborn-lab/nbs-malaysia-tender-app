@@ -379,11 +379,10 @@ async function buildKitExcelReport(site, computed, calcName) {
   };
   addReagentLineRow('Internal Standard (IS)', kc.is);
   const calKeys = Object.keys(kc.calibrators);
-  const qcKeys = Object.keys(kc.controls);
   styleSubheading(sKit, sKit.addRow([`Calibrators (${calKeys.length} level${calKeys.length === 1 ? '' : 's'})`, '', '', '', '', '', '', '', '', '', '', '']));
   calKeys.forEach((key, i) => addReagentLineRow(`Calibrator L${i}`, kc.calibrators[key]));
-  styleSubheading(sKit, sKit.addRow([`Controls / QC (${qcKeys.length} level${qcKeys.length === 1 ? '' : 's'})`, '', '', '', '', '', '', '', '', '', '', '']));
-  qcKeys.forEach((key, i) => addReagentLineRow(`Control ${i + 1}`, kc.controls[key]));
+  styleSubheading(sKit, sKit.addRow(['Controls / QC (one bundled set, all levels)', '', '', '', '', '', '', '', '', '', '', '']));
+  addReagentLineRow('Control Set (all QC levels)', kc.controlSet);
   styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.reagentsExtraCost)]));
   sKit.addRow([]);
   styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '', '']));
@@ -575,7 +574,7 @@ function buildKitPdfReport(site, computed, res, calcName) {
   };
   addReagentLinePdf('Internal Standard (IS)', kc.is);
   Object.keys(kc.calibrators).forEach((key, i) => addReagentLinePdf(`Calibrator L${i}`, kc.calibrators[key]));
-  Object.keys(kc.controls).forEach((key, i) => addReagentLinePdf(`Control ${i + 1}`, kc.controls[key]));
+  addReagentLinePdf('Control Set (all QC levels, one bundled pack)', kc.controlSet);
   h.ensureSpace(30);
   h.row('Extra IS, Cal & Control cost', fmtCur(kc.reagentsExtraCost));
 

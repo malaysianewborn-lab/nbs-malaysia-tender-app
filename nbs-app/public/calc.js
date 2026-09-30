@@ -295,15 +295,19 @@ function computeKitReagentLine(cfg, kitsQty, requiredUses) {
   };
 }
 
-// Calibrators and controls/QCs are each tracked as separate levels (L0, L1,
-// L2, ...) rather than one lumped line — each level is typically a distinct
-// vial with its own pack size/cost, and a shortfall in just one level should
-// be visible rather than averaged away. The NUMBER of levels is driven by
-// Batch Setup's own calLevels/qcLevels fields — the single source of truth
-// for "how many calibrator/control levels" — rather than a second, separate
-// count baked into the kit reagents table, so the two can never disagree.
-// Levels are zero-indexed (L0, L1, ...) to match common vendor numbering
-// (e.g. a 6-level set named L0-L5).
+// Calibrators are tracked as separate levels (L0, L1, L2, ...) since each
+// level is typically its own distinct vial with its own pack size/cost, and
+// a shortfall in just one level should be visible rather than averaged
+// away. Controls/QCs, by contrast, are usually sold as ONE bundled set
+// covering every QC level (e.g. a "ClinChek Plasma Control, Level I & II"
+// pack), so they're tracked as a single line (controlSet) rather than
+// per-level — the required volume still accounts for every QC level's
+// injections (qcLevels x qcReps x batches, i.e. batchCalc.totalQCAllBatches).
+// Calibrator level count is driven by Batch Setup's own calLevels field —
+// the single source of truth for "how many calibrator levels" — rather than
+// a second, separate count baked into the kit reagents table, so the two
+// can never disagree. Levels are zero-indexed (L0, L1, ...) to match common
+// vendor numbering (e.g. a 6-level set named L0-L5).
 function kitLevelKeys(count) {
   const n = Math.max(0, Math.floor(num(count)));
   const keys = [];
@@ -321,10 +325,9 @@ function computeKit(kit, batchCalc, gradientCalc) {
   batchCalc = batchCalc || {};
   gradientCalc = gradientCalc || { volA: 0, volB: 0 };
   const totalSamples = num(batchCalc.totalSamplesRunAllBatches);
+  const totalQC = num(batchCalc.totalQCAllBatches);
   const calUsesPerLevel = num(batchCalc.calReps) * num(batchCalc.batches, 1);
-  const qcUsesPerLevel = num(batchCalc.qcReps) * num(batchCalc.batches, 1);
   const calLevelKeys = kitLevelKeys(batchCalc.calLevels);
-  const qcLevelKeys = kitLevelKeys(batchCalc.qcLevels);
   const completeKits = kit.completeKits || {};
   const kitsQty = num(completeKits.qty);
   const costPerKit = num(completeKits.costPerKit);
@@ -346,16 +349,12 @@ function computeKit(kit, batchCalc, gradientCalc) {
   calLevelKeys.forEach((key) => {
     calibrators[key] = computeKitReagentLine((rg.calibrators || {})[key], kitsQty, calUsesPerLevel);
   });
-  const controls = {};
-  qcLevelKeys.forEach((key) => {
-    controls[key] = computeKitReagentLine((rg.controls || {})[key], kitsQty, qcUsesPerLevel);
-  });
+  const controlSet = computeKitReagentLine(rg.controlSet, kitsQty, totalQC);
   const calibratorsExtraCost = calLevelKeys.reduce((sum, key) => sum + calibrators[key].extraCost, 0);
-  const controlsExtraCost = qcLevelKeys.reduce((sum, key) => sum + controls[key].extraCost, 0);
-  const reagentsExtraCost = is.extraCost + calibratorsExtraCost + controlsExtraCost;
+  const reagentsExtraCost = is.extraCost + calibratorsExtraCost + controlSet.extraCost;
   const reagentsAllSufficient = is.sufficient
     && calLevelKeys.every((key) => calibrators[key].sufficient)
-    && qcLevelKeys.every((key) => controls[key].sufficient);
+    && controlSet.sufficient;
 
   const additionalItems = ((kit.additionalItems) || []).map((it) => ({
     ...it, totalCost: num(it && it.qty) * num(it && it.costPerUnit),
@@ -367,8 +366,8 @@ function computeKit(kit, batchCalc, gradientCalc) {
   return {
     kitsQty, costPerKit, assaysPerKit, kitCost, assaysCovered,
     mobilePhaseA, mobilePhaseB, washSolution, precipitantP, lcExtraCost, lcAllSufficient,
-    is, calibrators, controls, calLevelKeys, qcLevelKeys,
-    calibratorsExtraCost, controlsExtraCost, reagentsExtraCost, reagentsAllSufficient,
+    is, calibrators, controlSet, calLevelKeys,
+    calibratorsExtraCost, reagentsExtraCost, reagentsAllSufficient,
     additionalItems, additionalItemsTotal, totalCost,
   };
 }
