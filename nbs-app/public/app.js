@@ -107,6 +107,23 @@ function activeCalculatorType(data) {
   return calculatorType(data, (data && data.activeCalculatorId) || 'calc1');
 }
 
+// One-time backfill only: kit calculators saved before "packs from kit(s)"
+// became a free-text field had it auto-computed as (kits purchased x this
+// assumed per-kit count). Seed existing data with that same number once, so
+// a site someone's already been using doesn't silently drop to a shortfall
+// the moment this change ships — from here on it's an editable, independent field.
+const LEGACY_KIT_INCLUDED_PACKS = { washSolution: 1, mobilePhaseA: 2, mobilePhaseB: 2, precipitantP: 2 };
+function backfillKitPacksFromKits(data) {
+  if (!data || !data.kit || !data.kit.lcConsumables) return;
+  const kitsQty = Number(data.kit.completeKits && data.kit.completeKits.qty) || 0;
+  Object.keys(LEGACY_KIT_INCLUDED_PACKS).forEach((key) => {
+    const cfg = data.kit.lcConsumables[key];
+    if (cfg && cfg.packsFromKits === undefined) {
+      cfg.packsFromKits = LEGACY_KIT_INCLUDED_PACKS[key] * kitsQty;
+    }
+  });
+}
+
 // The starting field values for a brand-new/never-used calculator slot.
 function defaultCalculatorFields(type) {
   if (type === 'kit') {
@@ -117,13 +134,16 @@ function defaultCalculatorFields(type) {
       // Amino Acids in Plasma" (MS14000) price/contents sheet. Mobile Phase
       // A/B's volPerSampleML is NOT stored here — it's computed live from
       // the LC Method tab's gradient (see computeKit/computeKitLcLine).
+      // packsFromKits is free text (how many packs actually came in the
+      // box), pre-filled with the ClinMass MS14000 sheet's stated counts as
+      // a starting point — edit it if your kit is packaged differently.
       kit: {
         completeKits: { qty: 0, costPerKit: 0, assaysPerKit: 200 },
         lcConsumables: {
-          mobilePhaseA: { code: 'MS14008', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0 },
-          mobilePhaseB: { code: 'MS14009', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0 },
-          washSolution: { code: 'MS14005', packSizeML: 1000, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
-          precipitantP: { code: 'MS14021', packSizeML: 20, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          mobilePhaseA: { code: 'MS14008', packSizeML: 1000, packsFromKits: 0, extraPacksPurchased: 0, costPerPack: 0 },
+          mobilePhaseB: { code: 'MS14009', packSizeML: 1000, packsFromKits: 0, extraPacksPurchased: 0, costPerPack: 0 },
+          washSolution: { code: 'MS14005', packSizeML: 1000, packsFromKits: 0, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
+          precipitantP: { code: 'MS14021', packSizeML: 20, packsFromKits: 0, extraPacksPurchased: 0, costPerPack: 0, volPerSampleML: 0 },
         },
         additionalItems: [
           { code: 'MS14012', name: 'Internal Standard IS, lyophil.', unit: '5 ml', qty: 0, costPerUnit: 0 },
@@ -255,6 +275,7 @@ function switchCalculator(targetId) {
   // Backfill: a calculator parked before the LC Method tab existed won't have
   // its own lcGradient yet — give it the shared default rather than an empty table.
   if (!data.lcGradient) data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
+  if (targetType === 'kit') backfillKitPacksFromKits(data);
   data.activeCalculatorId = targetId;
 }
 
@@ -317,6 +338,7 @@ async function loadSite(id) {
   // Backfill: a kit calculator saved before the LC Method tab existed won't
   // have an lcGradient at the root yet.
   if (!state.site.data.lcGradient) state.site.data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
+  if (activeCalculatorType(state.site.data) === 'kit') backfillKitPacksFromKits(state.site.data);
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -1243,7 +1265,7 @@ function kitLcRow(label, fieldKey, s, computedPrefix, gradientPath) {
     <td class="label-cell">${label}<div class="hint" style="text-align:left;">${escapeHtml(cfg.code || '')}${gradientPath ? ' · linked to LC Method' : ''}</div></td>
     ${volCell}
     <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalRequiredML" data-fmt="num2">—</td>
-    <td class="linked" data-out="${computedPrefix}.${fieldKey}.packsFromKits" data-fmt="int">—</td>
+    <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.packsFromKits" data-type="number" value="${cfg.packsFromKits ?? 0}" /></td>
     <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.extraPacksPurchased" data-type="number" value="${cfg.extraPacksPurchased ?? 0}" /></td>
     <td><input type="number" step="any" data-path="kit.lcConsumables.${fieldKey}.packSizeML" data-type="number" value="${cfg.packSizeML ?? 0}" /></td>
     <td class="computed" data-out="${computedPrefix}.${fieldKey}.totalAvailableML" data-fmt="num2">—</td>
@@ -1259,6 +1281,7 @@ function renderKitSection(container, data) {
   data.kit.completeKits = data.kit.completeKits || { qty: 0, costPerKit: 0, assaysPerKit: 200 };
   data.kit.lcConsumables = data.kit.lcConsumables || {};
   data.kit.additionalItems = data.kit.additionalItems || [];
+  backfillKitPacksFromKits(data); // safety net for calculators saved before "packs from kit(s)" became free text
   const k = data.kit;
   const items = k.additionalItems;
   container.innerHTML = `
@@ -1288,7 +1311,7 @@ function renderKitSection(container, data) {
           <tr class="total-row"><td colspan="9">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.lcExtraCost" data-fmt="cur">—</td></tr>
         </tbody>
       </table>
-      <p class="note">"Total required" = volume per sample &times; total samples run across all batches (from the Batch Setup tab). Mobile Phase A/B's volume per sample is linked to the <strong>LC Method</strong> tab's gradient (A = Water/%A, B = ACN/%B) — edit the gradient there to change it. "Packs from kit(s)" comes from the vendor's kit contents (Mobile Phase A/B: 2 packs/kit, Wash Solution: 1 pack/kit, Precipitant P: 2 packs/kit) &times; complete kits purchased above. Add extra packs here if that's not enough.</p>
+      <p class="note">"Total required" = volume per sample &times; total samples run across all batches (from the Batch Setup tab). Mobile Phase A/B's volume per sample is linked to the <strong>LC Method</strong> tab's gradient (A = Water/%A, B = ACN/%B) — edit the gradient there to change it. "Packs from kit(s)" is free text — enter how many packs actually came bundled in the kit(s) you purchased (the vendor sheet's usual counts are Mobile Phase A/B: 2 packs/kit, Wash Solution: 1 pack/kit, Precipitant P: 2 packs/kit, but this can vary, so it's not auto-calculated). "Total available (mL)" = packs from kit(s) + extra packs bought, &times; pack size.</p>
     </div>
 
     <div class="card">

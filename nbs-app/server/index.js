@@ -429,7 +429,26 @@ function calculatorSnapshot(data, calcId) {
   out.currency = data.currency;
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
+  if (type === 'kit') backfillKitPacksFromKits(out);
   return { type, name: calculatorNameOf(data, calcId), data: out };
+}
+
+// One-time backfill, mirroring the same helper in public/app.js: sites saved
+// before "packs from kit(s)" became a free-text field had it auto-computed
+// as (kits purchased x this assumed per-kit count). Exports read straight
+// from the database, not the browser's in-memory backfilled state, so this
+// is applied here too — otherwise an unedited legacy site would export as
+// 0 packs from kit(s) until someone opens and re-saves it in the app.
+const LEGACY_KIT_INCLUDED_PACKS = { washSolution: 1, mobilePhaseA: 2, mobilePhaseB: 2, precipitantP: 2 };
+function backfillKitPacksFromKits(calcData) {
+  if (!calcData || !calcData.kit || !calcData.kit.lcConsumables) return;
+  const kitsQty = Number(calcData.kit.completeKits && calcData.kit.completeKits.qty) || 0;
+  Object.keys(LEGACY_KIT_INCLUDED_PACKS).forEach((key) => {
+    const cfg = calcData.kit.lcConsumables[key];
+    if (cfg && cfg.packsFromKits === undefined) {
+      cfg.packsFromKits = LEGACY_KIT_INCLUDED_PACKS[key] * kitsQty;
+    }
+  });
 }
 
 // ---------- Report export (Excel & PDF) ----------

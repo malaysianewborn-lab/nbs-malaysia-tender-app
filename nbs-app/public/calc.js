@@ -240,27 +240,23 @@ function computeAll(data) {
 }
 
 // ---------- Kit-based calculator (Calculator 2 type) ----------
-// Fixed pack counts bundled inside ONE complete kit, per the vendor's kit
-// contents list (e.g. ClinMass "Complete Kit for Amino Acids in Plasma",
-// MS14000) — used only while at least one complete kit is purchased.
-const KIT_INCLUDED_PACKS = {
-  washSolution: 1,
-  mobilePhaseA: 2,
-  mobilePhaseB: 2,
-  precipitantP: 2,
-};
 const KIT_DEFAULT_ASSAYS_PER_KIT = 200;
 
 // One LC-side consumable's sufficiency check: how much is required (volume
-// per sample x total samples) vs. how much is actually on hand (packs
-// bundled in the purchased kits, plus any extra packs bought separately).
-function computeKitLcLine(cfg, packsIncludedPerKit, kitsQty, totalSamples) {
+// per sample x total samples) vs. how much is actually on hand. "Packs from
+// kit(s)" is a free-text field the person fills in themselves (how many
+// packs actually came in the box) rather than something auto-multiplied
+// from complete-kits-purchased x an assumed per-kit count — vendors package
+// kits differently, so guessing that number risked being wrong. "Total
+// available (mL)" IS a genuine derived value (packs on hand x pack size,
+// both of which are entered), so it stays computed.
+function computeKitLcLine(cfg, totalSamples) {
   cfg = cfg || {};
   const packSizeML = num(cfg.packSizeML);
+  const packsFromKits = num(cfg.packsFromKits);
   const extraPacksPurchased = num(cfg.extraPacksPurchased);
   const costPerPack = num(cfg.costPerPack);
   const volPerSampleML = num(cfg.volPerSampleML);
-  const packsFromKits = packsIncludedPerKit * num(kitsQty);
   const totalPacks = packsFromKits + extraPacksPurchased;
   const totalAvailableML = totalPacks * packSizeML;
   const totalRequiredML = volPerSampleML * num(totalSamples);
@@ -288,10 +284,10 @@ function computeKit(kit, totalSamples, gradientCalc) {
   const assaysCovered = kitsQty * assaysPerKit;
 
   const lc = kit.lcConsumables || {};
-  const mobilePhaseA = computeKitLcLine({ ...(lc.mobilePhaseA || {}), volPerSampleML: gradientCalc.volA }, KIT_INCLUDED_PACKS.mobilePhaseA, kitsQty, totalSamples);
-  const mobilePhaseB = computeKitLcLine({ ...(lc.mobilePhaseB || {}), volPerSampleML: gradientCalc.volB }, KIT_INCLUDED_PACKS.mobilePhaseB, kitsQty, totalSamples);
-  const washSolution = computeKitLcLine(lc.washSolution, KIT_INCLUDED_PACKS.washSolution, kitsQty, totalSamples);
-  const precipitantP = computeKitLcLine(lc.precipitantP, KIT_INCLUDED_PACKS.precipitantP, kitsQty, totalSamples);
+  const mobilePhaseA = computeKitLcLine({ ...(lc.mobilePhaseA || {}), volPerSampleML: gradientCalc.volA }, totalSamples);
+  const mobilePhaseB = computeKitLcLine({ ...(lc.mobilePhaseB || {}), volPerSampleML: gradientCalc.volB }, totalSamples);
+  const washSolution = computeKitLcLine(lc.washSolution, totalSamples);
+  const precipitantP = computeKitLcLine(lc.precipitantP, totalSamples);
   const lcExtraCost = mobilePhaseA.extraCost + mobilePhaseB.extraCost + washSolution.extraCost + precipitantP.extraCost;
   const lcAllSufficient = mobilePhaseA.sufficient && mobilePhaseB.sufficient && washSolution.sufficient && precipitantP.sufficient;
 
