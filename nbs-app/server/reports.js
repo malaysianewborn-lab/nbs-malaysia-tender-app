@@ -7,7 +7,10 @@
 
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
-const { KIT_CAL_LEVEL_KEYS, KIT_QC_LEVEL_KEYS } = require('../public/calc.js');
+// computed.kitCalc.calibrators/controls (from computeKitAll) already has one
+// entry per level in order — its own keys (from computeKit's calLevelKeys/
+// qcLevelKeys, driven by Batch Setup's calLevels/qcLevels) are what these
+// report builders iterate over below, rather than a fixed count.
 
 function currencyOf(site) {
   return (site.data && site.data.currency) || { code: 'USD', symbol: '$' };
@@ -375,10 +378,12 @@ async function buildKitExcelReport(site, computed, calcName) {
     if (line.surplusUL < 0) r.getCell(9).font = { bold: true, color: { argb: 'FF9C0006' } };
   };
   addReagentLineRow('Internal Standard (IS)', kc.is);
-  styleSubheading(sKit, sKit.addRow(['Calibrators', '', '', '', '', '', '', '', '', '', '', '']));
-  KIT_CAL_LEVEL_KEYS.forEach((key, i) => addReagentLineRow(`Calibrator L${i + 1}`, kc.calibrators[key]));
-  styleSubheading(sKit, sKit.addRow(['Controls / QC', '', '', '', '', '', '', '', '', '', '', '']));
-  KIT_QC_LEVEL_KEYS.forEach((key, i) => addReagentLineRow(`Control ${i + 1}`, kc.controls[key]));
+  const calKeys = Object.keys(kc.calibrators);
+  const qcKeys = Object.keys(kc.controls);
+  styleSubheading(sKit, sKit.addRow([`Calibrators (${calKeys.length} level${calKeys.length === 1 ? '' : 's'})`, '', '', '', '', '', '', '', '', '', '', '']));
+  calKeys.forEach((key, i) => addReagentLineRow(`Calibrator L${i}`, kc.calibrators[key]));
+  styleSubheading(sKit, sKit.addRow([`Controls / QC (${qcKeys.length} level${qcKeys.length === 1 ? '' : 's'})`, '', '', '', '', '', '', '', '', '', '', '']));
+  qcKeys.forEach((key, i) => addReagentLineRow(`Control ${i + 1}`, kc.controls[key]));
   styleTotalRow(sKit.addRow(['EXTRA PACKS TOTAL COST', '', '', '', '', '', '', '', '', '', '', fmtCur(kc.reagentsExtraCost)]));
   sKit.addRow([]);
   styleSubheading(sKit, sKit.addRow(['Additional / Separately Purchased Items', '', '', '', '', '', '', '', '', '', '', '']));
@@ -569,8 +574,8 @@ function buildKitPdfReport(site, computed, res, calcName) {
     h.row(`${label} status`, line.sufficient ? 'Sufficient' : `Shortfall (${line.surplusUL.toFixed(1)} µL)`, { bold: !line.sufficient, color: line.sufficient ? '#14632f' : '#9c0006' });
   };
   addReagentLinePdf('Internal Standard (IS)', kc.is);
-  KIT_CAL_LEVEL_KEYS.forEach((key, i) => addReagentLinePdf(`Calibrator L${i + 1}`, kc.calibrators[key]));
-  KIT_QC_LEVEL_KEYS.forEach((key, i) => addReagentLinePdf(`Control ${i + 1}`, kc.controls[key]));
+  Object.keys(kc.calibrators).forEach((key, i) => addReagentLinePdf(`Calibrator L${i}`, kc.calibrators[key]));
+  Object.keys(kc.controls).forEach((key, i) => addReagentLinePdf(`Control ${i + 1}`, kc.controls[key]));
   h.ensureSpace(30);
   h.row('Extra IS, Cal & Control cost', fmtCur(kc.reagentsExtraCost));
 

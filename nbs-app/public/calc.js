@@ -41,7 +41,7 @@ function computeBatch(bs) {
   const totalQCAllBatches = totalQCPerBatch * batches;
   const totalBlanksAllBatches = blanksPerBatch * batches;
   return {
-    batches, calReps, qcReps,
+    batches, calLevels, calReps, qcLevels, qcReps,
     totalCalPerBatch, totalQCPerBatch, totalSamplesRunPerBatch, totalWellsUsedPerBatch,
     wellsRemaining, totalSamplesRunAllBatches, totalStudySamplesAllBatches,
     totalCalAllBatches, totalQCAllBatches, totalBlanksAllBatches,
@@ -295,16 +295,21 @@ function computeKitReagentLine(cfg, kitsQty, requiredUses) {
   };
 }
 
-// Calibrators are tracked as 5 separate levels (L1-L5) and controls/QCs as 2
-// separate levels, rather than one lumped "Calibrator Set" — each level is
-// typically a distinct vial with its own pack size/cost, and a shortfall in
-// just one level should be visible rather than averaged away. Every level
-// within a group is run the same number of times (calReps or qcReps, across
-// all batches) regardless of how many levels calLevels/qcLevels on the Batch
-// Setup tab says there are — Batch Setup's counts drive the overall well/
-// injection totals, these fixed 5+2 rows drive kit sufficiency.
-const KIT_CAL_LEVEL_KEYS = ['l1', 'l2', 'l3', 'l4', 'l5'];
-const KIT_QC_LEVEL_KEYS = ['l1', 'l2'];
+// Calibrators and controls/QCs are each tracked as separate levels (L0, L1,
+// L2, ...) rather than one lumped line — each level is typically a distinct
+// vial with its own pack size/cost, and a shortfall in just one level should
+// be visible rather than averaged away. The NUMBER of levels is driven by
+// Batch Setup's own calLevels/qcLevels fields — the single source of truth
+// for "how many calibrator/control levels" — rather than a second, separate
+// count baked into the kit reagents table, so the two can never disagree.
+// Levels are zero-indexed (L0, L1, ...) to match common vendor numbering
+// (e.g. a 6-level set named L0-L5).
+function kitLevelKeys(count) {
+  const n = Math.max(0, Math.floor(num(count)));
+  const keys = [];
+  for (let i = 0; i < n; i++) keys.push('l' + i);
+  return keys;
+}
 
 // gradientCalc (from computeGradient(data.lcGradient)) drives Mobile Phase
 // A/B's volume-per-sample automatically, same convention as the SOP-based
@@ -318,6 +323,8 @@ function computeKit(kit, batchCalc, gradientCalc) {
   const totalSamples = num(batchCalc.totalSamplesRunAllBatches);
   const calUsesPerLevel = num(batchCalc.calReps) * num(batchCalc.batches, 1);
   const qcUsesPerLevel = num(batchCalc.qcReps) * num(batchCalc.batches, 1);
+  const calLevelKeys = kitLevelKeys(batchCalc.calLevels);
+  const qcLevelKeys = kitLevelKeys(batchCalc.qcLevels);
   const completeKits = kit.completeKits || {};
   const kitsQty = num(completeKits.qty);
   const costPerKit = num(completeKits.costPerKit);
@@ -336,19 +343,19 @@ function computeKit(kit, batchCalc, gradientCalc) {
   const rg = kit.reagents || {};
   const is = computeKitReagentLine(rg.is, kitsQty, totalSamples);
   const calibrators = {};
-  KIT_CAL_LEVEL_KEYS.forEach((key) => {
+  calLevelKeys.forEach((key) => {
     calibrators[key] = computeKitReagentLine((rg.calibrators || {})[key], kitsQty, calUsesPerLevel);
   });
   const controls = {};
-  KIT_QC_LEVEL_KEYS.forEach((key) => {
+  qcLevelKeys.forEach((key) => {
     controls[key] = computeKitReagentLine((rg.controls || {})[key], kitsQty, qcUsesPerLevel);
   });
-  const calibratorsExtraCost = KIT_CAL_LEVEL_KEYS.reduce((sum, key) => sum + calibrators[key].extraCost, 0);
-  const controlsExtraCost = KIT_QC_LEVEL_KEYS.reduce((sum, key) => sum + controls[key].extraCost, 0);
+  const calibratorsExtraCost = calLevelKeys.reduce((sum, key) => sum + calibrators[key].extraCost, 0);
+  const controlsExtraCost = qcLevelKeys.reduce((sum, key) => sum + controls[key].extraCost, 0);
   const reagentsExtraCost = is.extraCost + calibratorsExtraCost + controlsExtraCost;
   const reagentsAllSufficient = is.sufficient
-    && KIT_CAL_LEVEL_KEYS.every((key) => calibrators[key].sufficient)
-    && KIT_QC_LEVEL_KEYS.every((key) => controls[key].sufficient);
+    && calLevelKeys.every((key) => calibrators[key].sufficient)
+    && qcLevelKeys.every((key) => controls[key].sufficient);
 
   const additionalItems = ((kit.additionalItems) || []).map((it) => ({
     ...it, totalCost: num(it && it.qty) * num(it && it.costPerUnit),
@@ -360,7 +367,8 @@ function computeKit(kit, batchCalc, gradientCalc) {
   return {
     kitsQty, costPerKit, assaysPerKit, kitCost, assaysCovered,
     mobilePhaseA, mobilePhaseB, washSolution, precipitantP, lcExtraCost, lcAllSufficient,
-    is, calibrators, controls, calibratorsExtraCost, controlsExtraCost, reagentsExtraCost, reagentsAllSufficient,
+    is, calibrators, controls, calLevelKeys, qcLevelKeys,
+    calibratorsExtraCost, controlsExtraCost, reagentsExtraCost, reagentsAllSufficient,
     additionalItems, additionalItemsTotal, totalCost,
   };
 }
@@ -404,6 +412,6 @@ if (typeof module !== 'undefined') {
   module.exports = {
     computeAll, computeBatch, computeGradient, computeCalibratorPrep, computeReagents, computeColumn,
     computeSolvents, computeConsumables, computeFreightTax, computeKitAll, computeKit,
-    KIT_CAL_LEVEL_KEYS, KIT_QC_LEVEL_KEYS,
+    kitLevelKeys,
   };
 }

@@ -9,7 +9,7 @@ const cors = require('cors');
 const cookieSession = require('cookie-session');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
-const { computeAll, computeKitAll } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
+const { computeAll, computeKitAll, kitLevelKeys } = require('../public/calc.js'); // same calc engine the app uses, for report consistency
 const { buildExcelReport, buildPdfReport, buildKitExcelReport, buildKitPdfReport } = require('./reports.js');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20 MB cap
@@ -429,35 +429,46 @@ function calculatorSnapshot(data, calcId) {
   out.currency = data.currency;
   out.tenderSpec = data.tenderSpec;
   out.supportingInfo = data.supportingInfo;
-  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out); }
+  if (type === 'kit') { migrateKitPacksPerKit(out); migrateKitReagents(out); migrateKitCalibratorLevels(out); ensureKitLevelDefaults(out); }
   return { type, name: calculatorNameOf(data, calcId), data: out };
 }
 
-const KIT_CAL_LEVEL_KEYS_SNAPSHOT = ['l1', 'l2', 'l3', 'l4', 'l5'];
-const KIT_QC_LEVEL_KEYS_SNAPSHOT = ['l1', 'l2'];
-
 // Mirrors public/app.js's migrateKitCalibratorLevels(): sites saved before
-// the Calibrator Set was split into L1-L5 calibrator levels and 2 control
-// (QC) levels had one lumped "calibratorSet" reagent line and no control/QC
-// tracking. The old numbers carry forward into Calibrator L1 (the safest
-// non-destructive landing spot); L2-L5 and both control levels start blank.
-// Exports read straight from the database, not the browser's in-memory
-// migrated state, so this recovery runs here too.
+// the Calibrator Set was split into per-level rows had one lumped
+// "calibratorSet" reagent line and no control/QC tracking. The old numbers
+// carry forward into Calibrator L0 (the safest non-destructive landing
+// spot); every other level starts blank and is filled in by
+// ensureKitLevelDefaults() below. Exports read straight from the database,
+// not the browser's in-memory migrated state, so this recovery runs here too.
 function migrateKitCalibratorLevels(calcData) {
   if (!calcData || !calcData.kit || !calcData.kit.reagents || calcData.kit.reagents.calibrators) return;
   const legacy = calcData.kit.reagents.calibratorSet;
-  const blankLevel = () => ({
-    packSizeUL: legacy ? legacy.packSizeUL : 1000,
-    packsPerKit: 0,
-    extraPacksPurchased: 0,
-    costPerPack: 0,
-    volPerUseUL: legacy ? legacy.volPerUseUL : 15,
-  });
-  calcData.kit.reagents.calibrators = { l1: legacy ? { ...legacy, code: undefined } : blankLevel() };
-  KIT_CAL_LEVEL_KEYS_SNAPSHOT.slice(1).forEach((key) => { calcData.kit.reagents.calibrators[key] = blankLevel(); });
+  calcData.kit.reagents.calibrators = legacy ? { l0: { ...legacy, code: undefined } } : {};
   calcData.kit.reagents.controls = {};
-  KIT_QC_LEVEL_KEYS_SNAPSHOT.forEach((key) => { calcData.kit.reagents.controls[key] = blankLevel(); });
   delete calcData.kit.reagents.calibratorSet;
+}
+
+// Mirrors public/app.js's ensureKitLevelDefaults(): Batch Setup's
+// calLevels/qcLevels fields are the single source of truth for how many
+// calibrator/control levels there are. Backfills a blank starting config
+// (packsPerKit 0 — never assume packs that were never confirmed) for any
+// level implied by the current count that doesn't have one yet. Exports
+// read straight from the database, not the browser's in-memory state, so
+// this runs here too — otherwise an unedited/legacy site would export with
+// missing rows instead of the correct blank ones.
+function ensureKitLevelDefaults(calcData) {
+  if (!calcData || !calcData.kit) return;
+  calcData.kit.reagents = calcData.kit.reagents || {};
+  calcData.kit.reagents.calibrators = calcData.kit.reagents.calibrators || {};
+  calcData.kit.reagents.controls = calcData.kit.reagents.controls || {};
+  const bs = calcData.batchSetup || {};
+  const blankLevel = () => ({ packSizeUL: 1000, packsPerKit: 0, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 });
+  kitLevelKeys(bs.calLevels).forEach((key) => {
+    if (!calcData.kit.reagents.calibrators[key]) calcData.kit.reagents.calibrators[key] = blankLevel();
+  });
+  kitLevelKeys(bs.qcLevels).forEach((key) => {
+    if (!calcData.kit.reagents.controls[key]) calcData.kit.reagents.controls[key] = blankLevel();
+  });
 }
 
 // Mirrors public/app.js's migrateKitReagents(): sites saved before the IS &

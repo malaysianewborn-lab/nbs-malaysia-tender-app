@@ -158,40 +158,57 @@ function migrateKitReagents(data) {
   data.kit.additionalItems = items.filter((it) => !it || (it.code !== 'MS14012' && it.code !== 'MS14013'));
 }
 
-// KIT_CAL_LEVEL_KEYS / KIT_QC_LEVEL_KEYS come from calc.js (loaded before
-// this file as a plain global, not a module) — reused here rather than
-// redeclared so both files can't drift apart.
+// kitLevelKeys(count) comes from calc.js (loaded before this file as a plain
+// global, not a module) — reused here rather than redeclared so both files
+// can't drift apart. It returns ['l0','l1',...] for `count` levels.
 
 // One-time migration: sites saved before the Calibrator Set was split into
-// L1-L5 calibrator levels and 2 control (QC) levels had one lumped
-// "calibratorSet" reagent line, and no control/QC tracking at all. The old
-// line never said how its packs/cost split across levels, so the safest
-// non-destructive landing spot is Calibrator L1 (it carries the old
-// numbers forward unchanged); L2-L5 and both control levels start blank
-// (0 packs/kit) with the same vol/use and pack size as a starting point, so
-// nothing existing is lost, double-counted, or silently reassigned to the
-// wrong level. Skipped once kit.reagents.calibrators already exists.
+// per-level rows had one lumped "calibratorSet" reagent line, and no
+// control/QC tracking at all. The old line never said how its packs/cost
+// split across levels, so the safest non-destructive landing spot is
+// Calibrator L0 (it carries the old numbers forward unchanged); every other
+// level starts blank and is filled in by ensureKitLevelDefaults() below,
+// which runs on every render and tracks Batch Setup's calLevels/qcLevels
+// counts. Skipped once kit.reagents.calibrators already exists.
 function migrateKitCalibratorLevels(data) {
   if (!data || !data.kit || !data.kit.reagents || data.kit.reagents.calibrators) return;
   const legacy = data.kit.reagents.calibratorSet;
-  const blankLevel = () => ({
-    packSizeUL: legacy ? legacy.packSizeUL : 1000,
-    packsPerKit: 0,
-    extraPacksPurchased: 0,
-    costPerPack: 0,
-    volPerUseUL: legacy ? legacy.volPerUseUL : 15,
-  });
-  data.kit.reagents.calibrators = { l1: legacy ? { ...legacy, code: undefined } : blankLevel() };
-  KIT_CAL_LEVEL_KEYS.slice(1).forEach((key) => { data.kit.reagents.calibrators[key] = blankLevel(); });
+  data.kit.reagents.calibrators = legacy ? { l0: { ...legacy, code: undefined } } : {};
   data.kit.reagents.controls = {};
-  KIT_QC_LEVEL_KEYS.forEach((key) => { data.kit.reagents.controls[key] = blankLevel(); });
   delete data.kit.reagents.calibratorSet;
+}
+
+// Batch Setup's calLevels/qcLevels fields are the single source of truth for
+// how many calibrator/control levels there are — NOT a separate count baked
+// into the kit reagents table, so the two can never disagree. This backfills
+// a blank starting config for any level implied by the current calLevels/
+// qcLevels that doesn't have one yet (a brand-new calculator, or the count
+// was just increased in Batch Setup); it never touches a level that already
+// has data, and runs on every render since the count can change at any time.
+// blankPacksPerKit defaults to 0 (never assume packs you haven't confirmed
+// you have) — pass 1 only for a brand-new calculator's starting defaults,
+// which mirror the vendor sheet's usual "one vial per level per kit".
+function ensureKitLevelDefaults(data, blankPacksPerKit) {
+  if (!data || !data.kit) return;
+  data.kit.reagents = data.kit.reagents || {};
+  data.kit.reagents.calibrators = data.kit.reagents.calibrators || {};
+  data.kit.reagents.controls = data.kit.reagents.controls || {};
+  const bs = data.batchSetup || {};
+  const blankLevel = () => ({
+    packSizeUL: 1000, packsPerKit: blankPacksPerKit || 0, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15,
+  });
+  kitLevelKeys(bs.calLevels).forEach((key) => {
+    if (!data.kit.reagents.calibrators[key]) data.kit.reagents.calibrators[key] = blankLevel();
+  });
+  kitLevelKeys(bs.qcLevels).forEach((key) => {
+    if (!data.kit.reagents.controls[key]) data.kit.reagents.controls[key] = blankLevel();
+  });
 }
 
 // The starting field values for a brand-new/never-used calculator slot.
 function defaultCalculatorFields(type) {
   if (type === 'kit') {
-    return {
+    const fields = {
       batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 6, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
       lcGradient: DEFAULT_LC_GRADIENT.map((r) => ({ ...r })),
       // Defaults below are read straight off the ClinMass "Complete Kit for
@@ -212,25 +229,16 @@ function defaultCalculatorFields(type) {
         },
         // IS is spiked into every sample/cal/QC/blank injection (pack size
         // is one reconstituted 5 ml vial = 5000 µL). Calibrators and
-        // controls/QCs are each tracked as separate levels (5 calibrator
-        // levels L1-L5, 2 control levels) rather than one lumped set, since
-        // each level is usually its own vial with its own pack size/cost;
-        // every level within a group runs calReps (or qcReps) times per
-        // batch, across all batches. Pack size defaults to one 1 ml vial
-        // per level (1000 µL) — edit per level if your kit differs.
+        // controls/QCs are each tracked as separate levels (L0, L1, ...)
+        // rather than one lumped set, since each level is usually its own
+        // vial with its own pack size/cost. The NUMBER of levels is filled
+        // in below from Batch Setup's calLevels/qcLevels (see
+        // ensureKitLevelDefaults) rather than fixed here, so it can never
+        // disagree with Batch Setup's own counts.
         reagents: {
           is: { code: 'MS14012', packSizeUL: 5000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 100 },
-          calibrators: {
-            l1: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-            l2: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-            l3: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-            l4: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-            l5: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-          },
-          controls: {
-            l1: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-            l2: { packSizeUL: 1000, packsPerKit: 1, extraPacksPurchased: 0, costPerPack: 0, volPerUseUL: 15 },
-          },
+          calibrators: {},
+          controls: {},
         },
         additionalItems: [
           { code: 'MS14014', name: 'Optimisation Mix, lyophil.', unit: '6 x 1 x 1 ml', qty: 0, costPerUnit: 0 },
@@ -248,6 +256,13 @@ function defaultCalculatorFields(type) {
       },
       freightTax: { freightItems: [], taxRate: 0.06, applyTaxToFreight: true },
     };
+    // Vendor sheets typically bundle one vial per calibrator/control level
+    // per kit, so a brand-new calculator's levels start at packsPerKit 1
+    // (matching the vendor default); anywhere else this same helper is used
+    // as a safety net, it defaults new levels to 0 (never assume packs you
+    // haven't confirmed you have).
+    ensureKitLevelDefaults(fields, 1);
+    return fields;
   }
   return {
     batchSetup: { batches: 5, samplesPerBatch: 40, calLevels: 8, calReps: 1, qcLevels: 2, qcReps: 1, blanksPerBatch: 0 },
@@ -360,7 +375,7 @@ function switchCalculator(targetId) {
   // Backfill: a calculator parked before the LC Method tab existed won't have
   // its own lcGradient yet — give it the shared default rather than an empty table.
   if (!data.lcGradient) data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); }
+  if (targetType === 'kit') { migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); ensureKitLevelDefaults(data); }
   data.activeCalculatorId = targetId;
 }
 
@@ -423,7 +438,7 @@ async function loadSite(id) {
   // Backfill: a kit calculator saved before the LC Method tab existed won't
   // have an lcGradient at the root yet.
   if (!state.site.data.lcGradient) state.site.data.lcGradient = DEFAULT_LC_GRADIENT.map((r) => ({ ...r }));
-  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); migrateKitCalibratorLevels(state.site.data); }
+  if (activeCalculatorType(state.site.data) === 'kit') { migrateKitPacksPerKit(state.site.data); migrateKitReagents(state.site.data); migrateKitCalibratorLevels(state.site.data); ensureKitLevelDefaults(state.site.data); }
   const currencySelect = document.getElementById('currency-select');
   if (currencySelect) currencySelect.value = state.site.data.currency.code;
   const versionsPanel = document.getElementById('versions-panel');
@@ -1391,9 +1406,12 @@ function renderKitSection(container, data) {
   data.kit.completeKits = data.kit.completeKits || { qty: 0, costPerKit: 0, assaysPerKit: 200 };
   data.kit.lcConsumables = data.kit.lcConsumables || {};
   data.kit.additionalItems = data.kit.additionalItems || [];
-  migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); // safety net for calculators saved before these fields existed
+  migrateKitPacksPerKit(data); migrateKitReagents(data); migrateKitCalibratorLevels(data); ensureKitLevelDefaults(data); // safety net for calculators saved before these fields existed
   const k = data.kit;
   const items = k.additionalItems;
+  const bs = data.batchSetup || {};
+  const calKeys = kitLevelKeys(bs.calLevels);
+  const qcKeys = kitLevelKeys(bs.qcLevels);
   container.innerHTML = `
     <div class="card">
       <h2>Complete Kit(s)</h2>
@@ -1434,18 +1452,18 @@ function renderKitSection(container, data) {
         </tr></thead>
         <tbody>
           ${kitReagentRow('Internal Standard (IS)', k.reagents.is, 'kit.reagents.is', 'kitCalc.is')}
-          <tr><td colspan="12" class="section-subhead">Calibrators</td></tr>
-          ${KIT_CAL_LEVEL_KEYS.map((key, i) => kitReagentRow(
-            `Calibrator L${i + 1}`, k.reagents.calibrators[key], `kit.reagents.calibrators.${key}`, `kitCalc.calibrators.${key}`
+          <tr><td colspan="12" class="section-subhead">Calibrators <span style="font-weight:normal;">(${calKeys.length} level${calKeys.length === 1 ? '' : 's'} — set on the Batch Setup tab)</span></td></tr>
+          ${calKeys.map((key, i) => kitReagentRow(
+            `Calibrator L${i}`, k.reagents.calibrators[key], `kit.reagents.calibrators.${key}`, `kitCalc.calibrators.${key}`
           )).join('')}
-          <tr><td colspan="12" class="section-subhead">Controls / QC</td></tr>
-          ${KIT_QC_LEVEL_KEYS.map((key, i) => kitReagentRow(
+          <tr><td colspan="12" class="section-subhead">Controls / QC <span style="font-weight:normal;">(${qcKeys.length} level${qcKeys.length === 1 ? '' : 's'} — set on the Batch Setup tab)</span></td></tr>
+          ${qcKeys.map((key, i) => kitReagentRow(
             `Control ${i + 1}`, k.reagents.controls[key], `kit.reagents.controls.${key}`, `kitCalc.controls.${key}`
           )).join('')}
           <tr class="total-row"><td colspan="10">EXTRA PACKS TOTAL COST</td><td colspan="2" class="computed" data-out="kitCalc.reagentsExtraCost" data-fmt="cur">—</td></tr>
         </tbody>
       </table>
-      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). Each calibrator level (L1-L5) and each control level is only consumed by its own injections (replicates per level &times; batches, from the Batch Setup tab) — a shortfall in a single level shows up on its own row rather than being averaged into one lumped total. "Pack size" is the usable volume from ONE reconstituted vial for that level (default 1 ml = 1000 µL per level; IS defaults to a 5 ml vial = 5000 µL) — edit per row if your kit differs.</p>
+      <p class="note">Internal Standard is spiked into every injection (study samples + calibrators + QCs + blanks, across all batches). Each calibrator level (numbered L0, L1, ... to match common vendor numbering) and each control level is only consumed by its own injections (replicates per level &times; batches) — a shortfall in a single level shows up on its own row rather than being averaged into one lumped total. The number of rows always matches "Calibrator levels per batch" and "QC levels per batch" on the <strong>Batch Setup</strong> tab — change the count there, not here. "Pack size" is the usable volume from ONE reconstituted vial for that level (default 1 ml = 1000 µL per level; IS defaults to a 5 ml vial = 5000 µL) — edit per row if your kit differs.</p>
     </div>
 
     <div class="card">
