@@ -482,7 +482,9 @@ function showLogin() {
 function showApp() {
   document.getElementById('login-screen').hidden = true;
   document.getElementById('app-screen').hidden = false;
-  loadSites();
+  loadSites().catch((err) => {
+    document.getElementById('tab-content').innerHTML = `<div class="card"><p>Could not load your sites: ${escapeHtml(err.message)}. Try refreshing the page; if it keeps happening, the server may be temporarily unavailable.</p></div>`;
+  });
 }
 on('login-form', 'submit', async (e) => {
   e.preventDefault();
@@ -718,13 +720,30 @@ on('tabs', 'click', (e) => {
 
 function renderActiveTab() {
   const container = document.getElementById('tab-content');
-  if (!state.site) { container.innerHTML = ''; return; }
+  if (!state.site) {
+    // No site loaded — don't blank the screen (switching tabs used to wipe
+    // out the "No sites yet" message loadSites() shows here). Tell the
+    // person what's going on instead, based on whether we know they simply
+    // have zero sites yet vs. haven't finished loading / failed to load.
+    container.innerHTML = Array.isArray(state.sites) && state.sites.length === 0
+      ? '<div class="card"><p>No sites yet. Click “+ New Site” above to create your first one.</p></div>'
+      : '<div class="card"><p>No site selected yet. Pick one from the dropdown above, or click “+ New Site”.</p></div>';
+    return;
+  }
   const renderers = {
     tenderSpec: renderTenderSpec, calculator: renderCalculator,
     supportingInfo: renderSupportingInfo, discussion: renderDiscussion,
   };
   container.innerHTML = '';
-  renderers[state.activeTab](container, state.site.data);
+  try {
+    renderers[state.activeTab](container, state.site.data);
+  } catch (err) {
+    // A render bug used to leave this tab silently blank with no clue why.
+    // Surface it instead so it's reportable, and so the person isn't left
+    // staring at an empty page wondering if their data disappeared.
+    console.error('Render error on tab', state.activeTab, err);
+    container.innerHTML = `<div class="card"><p>Something went wrong displaying this tab (${escapeHtml(err.message)}). Your data is safe — try switching tabs or refreshing the page. If it keeps happening, let us know what you were doing just before this appeared.</p></div>`;
+  }
 }
 
 // The Calculator tab's sub-navigation depends on which calculator type is
